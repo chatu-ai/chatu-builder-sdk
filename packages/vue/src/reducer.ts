@@ -68,8 +68,8 @@ export function reduceEvent(state: BuilderUiState, ev: BuilderEvent): void {
       const existing = cards.find(c => c.id === ev.id)
       if (existing) {
         existing.state = ev.state
-        existing.label = ev.label
-        existing.detail = ev.detail
+        if (ev.label) existing.label = ev.label      // 空 label = 仅状态更新（agent3 tool_result）
+        if (ev.detail !== undefined) existing.detail = ev.detail
       } else {
         cards.push({ id: ev.id, label: ev.label, state: ev.state, detail: ev.detail })
       }

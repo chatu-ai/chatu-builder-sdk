@@ -9,7 +9,7 @@ import { resilientStream, type ResilienceOptions } from './resume'
 
 export interface A2ATransport {
   /** message/stream：发起生成，产出原始 A2A 事件 */
-  stream(conversationId: string, prompt: string, opts?: { attachments?: unknown[] }): AsyncIterable<unknown>
+  stream(conversationId: string, prompt: string, opts?: { agentId?: string; attachments?: unknown[] }): AsyncIterable<unknown>
   /** tasks/resubscribe：按 task 重连（服务端回放 seq > lastSeq） */
   resubscribe(xid: string, lastSeq: number): AsyncIterable<unknown>
   /** tasks/cancel */
@@ -23,6 +23,11 @@ export interface BuilderClientOptions {
   auth: AuthProvider
   fetchImpl?: typeof fetch
   resilience?: ResilienceOptions
+  /**
+   * 原始传输事件 → BuilderEvent 解析器。默认 A2A 解析；
+   * 传输层已产出 BuilderEvent 时（如 agent3 SSE 直通）传 identity：`e => e as BuilderEvent`
+   */
+  parse?: (raw: unknown) => BuilderEvent | null
 }
 
 export interface SandboxStatus {
@@ -35,7 +40,7 @@ export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileN
 
 export interface BuilderClient {
   chat: {
-    stream(conversationId: string, prompt: string, opts?: { attachments?: unknown[] }): AsyncIterable<BuilderEvent>
+    stream(conversationId: string, prompt: string, opts?: { agentId?: string; attachments?: unknown[] }): AsyncIterable<BuilderEvent>
     resubscribe(conversationId: string, xid: string, lastSeq: number): AsyncIterable<BuilderEvent>
     cancel(conversationId: string, xid: string): Promise<void>
   }
@@ -57,6 +62,7 @@ export interface BuilderClient {
 export function createBuilderClient(options: BuilderClientOptions): BuilderClient {
   const { restBase, transport, auth } = options
   const doFetch = options.fetchImpl ?? fetch
+  const parse = options.parse ?? parseBuilderEvent
 
   async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     const res = await doFetch(`${restBase}${path}`, auth.apply(init))
@@ -67,7 +73,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
 
   /** 把原始 A2A 迭代器包装成解析后的迭代器 */
   async function* parsed(src: AsyncIterable<unknown>): AsyncIterable<BuilderEvent | null> {
-    for await (const raw of src) yield parseBuilderEvent(raw)
+    for await (const raw of src) yield parse(raw)
   }
 
   return {
