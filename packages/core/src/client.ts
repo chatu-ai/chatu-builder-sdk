@@ -35,7 +35,7 @@ export interface SandboxStatus {
   previewUrl?: string
   devServer?: { running: boolean; lastError?: string }
 }
-export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt: string }
+export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
 
 export interface BuilderClient {
@@ -116,12 +116,20 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       previewToken: id => req(`/${id}/preview-token`),
     },
     versions: {
-      list: (id, opts) => req(`/${id}/versions${opts?.limit ? `?limit=${opts.limit}` : ''}`),
-      restore: (id, sha) => req(`/${id}/versions/${sha}/restore`, { method: 'POST' }),
+      // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）
+      list: async (id, opts) => {
+        const r = await req<{ versions?: VersionInfo[] } | VersionInfo[]>(`/${id}/versions${opts?.limit ? `?limit=${opts.limit}` : ''}`)
+        return Array.isArray(r) ? r : (r.versions ?? [])
+      },
+      restore: async (id, sha) => { await req(`/${id}/versions/${sha}/restore`, { method: 'POST' }) },
     },
     files: {
-      tree: (id, opts) => req(`/${id}/files?${qs(opts)}`),
-      read: (id, path, opts) => req(`/${id}/files/read?${qs({ path, ...opts })}`),
+      // 服务端形状：{ tree: FileNode[] }
+      tree: async (id, opts) => {
+        const r = await req<{ tree?: FileNode[] } | FileNode[]>(`/${id}/files?${qs(opts)}`)
+        return Array.isArray(r) ? r : (r.tree ?? [])
+      },
+      read: (id, path, opts) => req<string>(`/${id}/files/read?${qs({ path, ...opts })}`),
       downloadUrl: id => `${restBase}/${id}/files/download`,
     },
   }
