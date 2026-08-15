@@ -44,9 +44,15 @@ importers:
         specifier: workspace:*
         version: link:../core
     devDependencies:
+      '@chatu-builder-sdk/mock':
+        specifier: workspace:*
+        version: link:../mock
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7
       vue:
         specifier: ^3.5.0
         version: 3.5.41(typescript@5.9.3)
