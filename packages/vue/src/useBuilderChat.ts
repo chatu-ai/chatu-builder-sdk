@@ -18,9 +18,18 @@ export function useBuilderChat(client: BuilderClient, conversationId: string) {
     state.agentState = 'streaming'
     streamError.value = null
     try {
+      let pending = true
       for await (const ev of client.chat.stream(conversationId, prompt)) {
         if (ev.kind === 'ack') activeXid = ev.xid
         reduceEvent(state, ev)
+        // 首个带真实 xid 的事件到达后，把用户输入挂到本轮
+        if (pending && ev.xid && ev.xid !== 'pending') {
+          const round = state.rounds.find(r => r.xid === ev.xid)
+          if (round) {
+            round.userText = prompt
+            pending = false
+          }
+        }
       }
     } catch (err) {
       state.agentState = 'error'

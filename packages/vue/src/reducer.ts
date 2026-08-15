@@ -13,6 +13,8 @@ export interface TaskCardUi {
 
 export interface RoundUi {
   xid: string
+  /** 本轮用户输入（由 useBuilderChat.send 写入，事件流本身不含） */
+  userText?: string
   text: string
   taskCards: TaskCardUi[]
   version?: { sha: string; message: string; filesChanged: number }
