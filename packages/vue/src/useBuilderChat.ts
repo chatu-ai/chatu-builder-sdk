@@ -36,6 +36,29 @@ export function useBuilderChat(client: BuilderClient, conversationId: string) {
       streamError.value = String(err)
     } finally {
       activeXid = null
+      void refreshVersions()
+    }
+  }
+
+  /**
+   * 用 REST 刷新版本列表（每轮收尾服务端才 commit，与 done 事件有毫秒级先后，故延迟重试一次）
+   */
+  async function refreshVersions(): Promise<void> {
+    const load = async () => {
+      const list = await client.versions.list(conversationId)
+      state.versions.splice(0, state.versions.length, ...list.map(v => ({ sha: v.sha, message: v.message, filesChanged: v.filesChanged })))
+      return list.length
+    }
+    try {
+      const before = await load()
+      await new Promise(r => setTimeout(r, 1500))
+      const after = await load()
+      if (after === before) {
+        await new Promise(r => setTimeout(r, 2500))
+        await load()
+      }
+    } catch {
+      // 版本列表非关键路径，静默
     }
   }
 
@@ -43,11 +66,15 @@ export function useBuilderChat(client: BuilderClient, conversationId: string) {
     if (activeXid) await client.chat.cancel(conversationId, activeXid)
   }
 
+  // 初次挂载：加载已有版本（重新打开会话时）
+  void refreshVersions()
+
   return {
     state: readonly(state),
     streamError: readonly(streamError),
     isStreaming: computed(() => state.agentState === 'streaming'),
     send,
     cancel,
+    refreshVersions,
   }
 }
