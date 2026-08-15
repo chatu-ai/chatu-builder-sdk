@@ -78,6 +78,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
     sandbox: {
       status: async () => status,
       heartbeat: async () => {},
+      previewToken: async () => ({ token: 'mock-token', previewUrl: `${status.previewUrl ?? ''}/?t=mock-token` }),
     },
     versions: {
       list: async () => versions,
