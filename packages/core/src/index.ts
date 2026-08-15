@@ -1,3 +1,5 @@
 export * from './events'
 export * from './auth'
 export * from './client'
+export * from './parse'
+export * from './resume'

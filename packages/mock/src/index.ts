@@ -1,8 +1,12 @@
 /**
  * createMockBuilderClient —— 按脚本回放事件序列（08 §6）。
- * 内置脚本对应 DoD 场景 1（落地页生成）与场景 2（增量修改），支持延时与断线注入。
+ * 支持延时与断线注入；断线后 resubscribe 从 lastSeq 续传（与真实服务端语义一致），
+ * 因此 UI 对 mock 与真实 client 的行为观感完全相同。
  */
-import type { BuilderClient, BuilderEvent } from '@chatu-builder-sdk/core'
+import type {
+  BuilderClient, BuilderEvent, FileNode, SandboxStatus, VersionInfo,
+} from '@chatu-builder-sdk/core'
+import { resilientStream } from '@chatu-builder-sdk/core'
 
 export interface MockScriptStep {
   event: BuilderEvent
@@ -14,9 +18,92 @@ export interface MockScriptStep {
 export interface MockScript {
   name: string
   steps: MockScriptStep[]
+  /** 初始文件树（fileDiff 事件会在其上演进） */
+  initialTree?: FileNode[]
 }
 
-export function createMockBuilderClient(_script: MockScript): BuilderClient {
-  // TODO(M4-W1): 实现脚本回放；内置 scenario1/scenario2 脚本随实现提交
-  throw new Error('not implemented: see 003.技术方案/08 §6')
+export interface MockBuilderClient extends BuilderClient {
+  /** 测试辅助：当前沙箱状态（随 preview 事件演进） */
+  readonly currentStatus: SandboxStatus
 }
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+export function createMockBuilderClient(script: MockScript): MockBuilderClient {
+  let status: SandboxStatus = { state: 'creating' }
+  const versions: VersionInfo[] = []
+  let tree: FileNode[] = script.initialTree ?? []
+  let dropped = false // 每脚本只断线一次
+
+  function applySideEffects(ev: BuilderEvent) {
+    if (ev.kind === 'ack') status = { state: ev.sandbox.state, previewUrl: ev.sandbox.previewUrl }
+    if (ev.kind === 'preview') status = {
+      ...status,
+      state: ev.state === 'ready' ? 'ready' : status.state,
+      previewUrl: ev.url ?? status.previewUrl,
+      devServer: { running: ev.state === 'ready', lastError: ev.error ?? undefined },
+    }
+    if (ev.kind === 'version') versions.unshift({
+      sha: ev.sha, message: ev.message, filesChanged: ev.filesChanged, createdAt: new Date().toISOString(),
+    })
+    if (ev.kind === 'fileDiff') tree = upsertPath(tree, ev.path, ev.action === 'delete')
+  }
+
+  async function* replay(fromSeq: number): AsyncIterable<BuilderEvent | null> {
+    for (const step of script.steps) {
+      const ev = step.event
+      if (ev.kind !== 'ack' && ev.seq <= fromSeq) continue // 服务端回放语义
+      if (step.delayMs) await sleep(step.delayMs)
+      applySideEffects(ev)
+      yield ev
+      if (step.dropConnectionAfter && !dropped) {
+        dropped = true
+        throw new Error('mock: connection dropped')
+      }
+    }
+  }
+
+  const stream = (fromSeq: number) => resilientStream(
+    { open: () => replay(fromSeq), reopen: seq => replay(seq) },
+    { baseDelayMs: 10 },
+  )
+
+  return {
+    get currentStatus() { return status },
+    chat: {
+      stream: () => stream(0),
+      resubscribe: (_c, _x, lastSeq) => stream(lastSeq),
+      cancel: async () => { status = { ...status, state: 'ready' } },
+    },
+    sandbox: {
+      status: async () => status,
+      heartbeat: async () => {},
+    },
+    versions: {
+      list: async () => versions,
+      restore: async (_id, sha) => {
+        const i = versions.findIndex(v => v.sha === sha)
+        if (i < 0) throw new Error(`mock: unknown version ${sha}`)
+        versions.splice(0, i) // 回滚 = 丢弃更新的版本
+      },
+    },
+    files: {
+      tree: async () => tree,
+      read: async (_id, path) => `// mock content of ${path}\n`,
+      downloadUrl: () => 'https://mock.invalid/download.zip',
+    },
+  }
+}
+
+/** 极简树维护：仅保证 path 出现/消失，目录按需创建 */
+function upsertPath(tree: FileNode[], path: string, remove: boolean): FileNode[] {
+  const [head, ...rest] = path.split('/')
+  const next = tree.filter(n => n.path !== head)
+  if (remove && rest.length === 0) return next
+  const existing = tree.find(n => n.path === head)
+  if (rest.length === 0) return [...next, { path: head, type: 'file' }]
+  const dir: FileNode = existing?.type === 'dir' ? existing : { path: head, type: 'dir', children: [] }
+  return [...next, { ...dir, children: upsertPath(dir.children ?? [], rest.join('/'), remove) }]
+}
+
+export * from './scenarios'

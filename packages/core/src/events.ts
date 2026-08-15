@@ -16,6 +16,16 @@ const base = z.object({
   seq: z.number().int().nonnegative(),
 })
 
+/** 流前确认事件（服务端自产，固定 seq=0，不参与去重排序——R17） */
+export const AckEvent = base.extend({
+  kind: z.literal('ack'),
+  sandbox: z.object({
+    sandboxId: z.string(),
+    state: SandboxState,
+    previewUrl: z.string().url().optional(),
+  }),
+})
+
 export const MessageEvent = base.extend({
   kind: z.literal('message'),
   role: z.enum(['assistant', 'system']),
@@ -60,6 +70,6 @@ export const DoneEvent = base.extend({
 })
 
 export const BuilderEvent = z.discriminatedUnion('kind', [
-  MessageEvent, TaskCardEvent, FileDiffEvent, PreviewEvent, VersionEvent, DoneEvent,
+  AckEvent, MessageEvent, TaskCardEvent, FileDiffEvent, PreviewEvent, VersionEvent, DoneEvent,
 ])
 export type BuilderEvent = z.infer<typeof BuilderEvent>

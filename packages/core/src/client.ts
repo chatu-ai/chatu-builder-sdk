@@ -1,22 +1,28 @@
 /**
- * BuilderClient —— 08 §2 冻结 API 面。
- * A2A 传输层由宿主注入（chat-web 传入 libs/a2a-client 的实例），core 不重写传输。
+ * BuilderClient —— 08 §2 冻结 API 面的实现。
+ * A2A 传输层由宿主注入（chat-web 传入 libs/a2a-client 的包装），core 不重写传输。
  */
 import type { AuthProvider } from './auth'
 import type { BuilderEvent, SandboxState } from './events'
+import { parseBuilderEvent } from './parse'
+import { resilientStream, type ResilienceOptions } from './resume'
 
 export interface A2ATransport {
-  /** message/stream */
-  stream(payload: unknown): AsyncIterable<unknown>
-  /** tasks/resubscribe */
-  resubscribe(taskId: string): AsyncIterable<unknown>
-  cancel(taskId: string): Promise<void>
+  /** message/stream：发起生成，产出原始 A2A 事件 */
+  stream(conversationId: string, prompt: string, opts?: { attachments?: unknown[] }): AsyncIterable<unknown>
+  /** tasks/resubscribe：按 task 重连（服务端回放 seq > lastSeq） */
+  resubscribe(xid: string, lastSeq: number): AsyncIterable<unknown>
+  /** tasks/cancel */
+  cancel(xid: string): Promise<void>
 }
 
 export interface BuilderClientOptions {
+  /** REST 前缀，如 https://api.example.com/web/builder */
   restBase: string
   transport: A2ATransport
   auth: AuthProvider
+  fetchImpl?: typeof fetch
+  resilience?: ResilienceOptions
 }
 
 export interface SandboxStatus {
@@ -24,13 +30,11 @@ export interface SandboxStatus {
   previewUrl?: string
   devServer?: { running: boolean; lastError?: string }
 }
-
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
 
 export interface BuilderClient {
   chat: {
-    /** 发送 prompt，返回有序无重（seq 去重后）的事件流；断线自动 resubscribe（指数退避） */
     stream(conversationId: string, prompt: string, opts?: { attachments?: unknown[] }): AsyncIterable<BuilderEvent>
     resubscribe(conversationId: string, xid: string, lastSeq: number): AsyncIterable<BuilderEvent>
     cancel(conversationId: string, xid: string): Promise<void>
@@ -46,11 +50,82 @@ export interface BuilderClient {
   files: {
     tree(conversationId: string, opts?: { path?: string; ref?: string }): Promise<FileNode[]>
     read(conversationId: string, path: string, opts?: { ref?: string }): Promise<string>
-    downloadUrl(conversationId: string): Promise<string>
+    downloadUrl(conversationId: string): string
   }
 }
 
-export function createBuilderClient(_options: BuilderClientOptions): BuilderClient {
-  // TODO(M4-W1): 实现 —— REST 封装 + A2A 事件解析(events.ts schema) + seq 去重/重连
-  throw new Error('not implemented: see 003.技术方案/08 §2')
+export function createBuilderClient(options: BuilderClientOptions): BuilderClient {
+  const { restBase, transport, auth } = options
+  const doFetch = options.fetchImpl ?? fetch
+
+  async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const res = await doFetch(`${restBase}${path}`, auth.apply(init))
+    if (!res.ok) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
+    const ct = res.headers.get('content-type') ?? ''
+    return (ct.includes('json') ? res.json() : res.text()) as Promise<T>
+  }
+
+  /** 把原始 A2A 迭代器包装成解析后的迭代器 */
+  async function* parsed(src: AsyncIterable<unknown>): AsyncIterable<BuilderEvent | null> {
+    for await (const raw of src) yield parseBuilderEvent(raw)
+  }
+
+  return {
+    chat: {
+      stream(conversationId, prompt, opts) {
+        // xid 在 ack 事件中获知，用于断线 reopen
+        let xid: string | undefined
+        const base = resilientStream({
+          open: () => parsed(transport.stream(conversationId, prompt, opts)),
+          reopen: lastSeq => {
+            if (!xid) throw new Error('cannot resubscribe before ack (xid unknown)')
+            return parsed(transport.resubscribe(xid, lastSeq))
+          },
+        }, options.resilience)
+        // 旁路捕获 xid
+        return (async function* () {
+          for await (const ev of base) {
+            if (ev.kind === 'ack') xid = ev.xid
+            yield ev
+          }
+        })()
+      },
+      resubscribe(_conversationId, xid, lastSeq) {
+        return resilientStream({
+          open: () => parsed(transport.resubscribe(xid, lastSeq)),
+          reopen: seq => parsed(transport.resubscribe(xid, seq)),
+        }, options.resilience)
+      },
+      cancel: (_conversationId, xid) => transport.cancel(xid),
+    },
+    sandbox: {
+      status: id => req(`/sandbox/${id}/status`),
+      heartbeat: (id, opts) => req(`/sandbox/${id}/heartbeat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(opts),
+      }),
+    },
+    versions: {
+      list: (id, opts) => req(`/${id}/versions${opts?.limit ? `?limit=${opts.limit}` : ''}`),
+      restore: (id, sha) => req(`/${id}/versions/${sha}/restore`, { method: 'POST' }),
+    },
+    files: {
+      tree: (id, opts) => req(`/${id}/files?${qs(opts)}`),
+      read: (id, path, opts) => req(`/${id}/files/read?${qs({ path, ...opts })}`),
+      downloadUrl: id => `${restBase}/${id}/files/download`,
+    },
+  }
+}
+
+export class BuilderApiError extends Error {
+  constructor(readonly status: number, body: string) {
+    super(`builder api ${status}: ${body.slice(0, 200)}`)
+  }
+}
+
+function qs(obj?: Record<string, string | undefined>): string {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(obj ?? {})) if (v !== undefined) p.set(k, v)
+  return p.toString()
 }
