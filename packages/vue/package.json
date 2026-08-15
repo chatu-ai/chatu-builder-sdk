@@ -1,0 +1,22 @@
+{
+  "name": "@chatu-builder-sdk/vue",
+  "version": "0.0.1",
+  "description": "Vue 3 bindings: useBuilderChat / useSandboxStatus / useBuilderFiles + headless components",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@chatu-builder-sdk/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vue": "^3.5.0"
+  }
+}

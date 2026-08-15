@@ -1,0 +1,20 @@
+{
+  "name": "@chatu-builder-sdk/mock",
+  "version": "0.0.1",
+  "description": "Mock BuilderClient: scripted event replay with latency & disconnect injection (M4 UI dev)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@chatu-builder-sdk/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "chatu-builder-sdk",
+  "private": true,
+  "version": "0.0.1",
+  "description": "ChatU Builder client SDK monorepo (core / vue / mock)",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@10.0.0"
+}
