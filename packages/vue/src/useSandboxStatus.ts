@@ -2,8 +2,12 @@ import { onScopeDispose, readonly, ref } from 'vue'
 import type { BuilderClient, SandboxStatus } from '@chatu-builder-sdk/core'
 
 export interface SandboxStatusOptions {
-  /** 状态轮询间隔（恢复中等过渡态使用），默认 2000ms */
+  /** 过渡态（创建/预热/恢复/快照/未知）轮询间隔，默认 3000ms */
   pollMs?: number
+  /** 稳定态（ready/busy）轮询间隔，默认 60000ms——此时状态主要由 SSE 事件与心跳响应维护 */
+  idlePollMs?: number
+  /** 休眠态轮询间隔，默认 15000ms（等待唤醒） */
+  hibernatedPollMs?: number
   /** 心跳间隔（08 §4：页面可见才发），默认 30000ms */
   heartbeatMs?: number
   /** 可见性探针（默认读 document.visibilityState；测试可注入） */
@@ -12,9 +16,12 @@ export interface SandboxStatusOptions {
   clearInterval?: typeof globalThis.clearInterval
 }
 
+const TRANSITIONAL = new Set(['requested', 'creating', 'warming', 'resuming', 'snapshotting'])
+
 /**
  * 沙箱状态 + 心跳组合式 API（08 §4）
- * tab 隐藏即停心跳（省 TTL）；恢复期加速轮询由调用方通过 refresh 触发。
+ * - 自适应轮询：过渡态密集、稳定态稀疏、休眠态中等；页面隐藏时不轮询、不心跳
+ * - 心跳响应携带 state，稳定态下以此为主要状态来源，避免高频打 status
  */
 export function useSandboxStatus(
   client: BuilderClient,
@@ -29,8 +36,21 @@ export function useSandboxStatus(
     (() => (typeof document === 'undefined' ? true : document.visibilityState === 'visible'))
   const setI = opts.setInterval ?? globalThis.setInterval.bind(globalThis)
   const clearI = opts.clearInterval ?? globalThis.clearInterval.bind(globalThis)
+  const pollMs = opts.pollMs ?? 3_000
+  const idlePollMs = opts.idlePollMs ?? 60_000
+  const hibernatedPollMs = opts.hibernatedPollMs ?? 15_000
+
+  let lastPoll = 0
+
+  function currentInterval(): number {
+    const s = status.value?.state
+    if (!s || TRANSITIONAL.has(s)) return pollMs
+    if (s === 'hibernated') return hibernatedPollMs
+    return idlePollMs
+  }
 
   async function refresh(): Promise<void> {
+    lastPoll = Date.now()
     try {
       status.value = await client.sandbox.status(conversationId)
       error.value = null
@@ -42,18 +62,28 @@ export function useSandboxStatus(
   async function beatOnce(): Promise<void> {
     if (!isVisible()) return
     try {
-      await client.sandbox.heartbeat(conversationId, { visible: true })
+      const r = (await client.sandbox.heartbeat(conversationId, { visible: true })) as
+        | { state?: SandboxStatus['state'] }
+        | void
+      // 心跳响应带 state（BuilderController），稳定态下据此更新，免打 status
+      if (r && typeof r === 'object' && r.state && status.value) {
+        status.value = { ...status.value, state: r.state }
+      }
     } catch {
       // 心跳失败不打扰用户；状态轮询会暴露真实问题
     }
   }
 
+  // 单一 1s tick 调度器：按当前状态决定是否到期轮询（避免多定时器切换）
+  const tick = setI(() => {
+    if (!isVisible()) return
+    if (Date.now() - lastPoll >= currentInterval()) void refresh()
+  }, 1_000)
   const heartbeatTimer = setI(() => void beatOnce(), opts.heartbeatMs ?? 30_000)
-  const pollTimer = setI(() => void refresh(), opts.pollMs ?? 2_000)
 
   function stop(): void {
+    clearI(tick)
     clearI(heartbeatTimer)
-    clearI(pollTimer)
   }
 
   onScopeDispose(stop)

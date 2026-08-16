@@ -46,7 +46,7 @@ export interface BuilderClient {
   }
   sandbox: {
     status(conversationId: string): Promise<SandboxStatus>
-    heartbeat(conversationId: string, opts: { visible: boolean }): Promise<void>
+    heartbeat(conversationId: string, opts: { visible: boolean }): Promise<void | { ok?: boolean; state?: SandboxState | string }>
     /** 一次性预览 token（06 §6.1）：返回可直接作 iframe src 的带 ?t= 的 URL */
     previewToken(conversationId: string): Promise<{ token: string; previewUrl: string }>
   }
