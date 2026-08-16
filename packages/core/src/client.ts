@@ -70,7 +70,9 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
     const res = await doFetch(`${restBase}${path}`, auth.apply(init))
     if (!res.ok) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
     const ct = res.headers.get('content-type') ?? ''
-    return (ct.includes('json') ? res.json() : res.text()) as Promise<T>
+    if (!ct.includes('json')) return (await res.text()) as T
+    const json: unknown = await res.json()
+    return unwrapEnvelope<T>(json)
   }
 
   /** 把原始 A2A 迭代器包装成解析后的迭代器 */
@@ -133,6 +135,19 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       downloadUrl: id => `${restBase}/${id}/files/download`,
     },
   }
+}
+
+/**
+ * Dapi.Web 结果过滤器会把 object 返回包成 { code, data, message }（ContentResult 直通不包）。
+ * 统一拆信封：code !== 0 视为业务错误抛出；非信封形状原样返回。
+ */
+function unwrapEnvelope<T>(json: unknown): T {
+  if (json && typeof json === 'object' && 'code' in json && 'data' in json) {
+    const env = json as { code: number; data: T; message?: string }
+    if (env.code !== 0) throw new BuilderApiError(200, env.message ?? `api code ${env.code}`)
+    return env.data
+  }
+  return json as T
 }
 
 export class BuilderApiError extends Error {

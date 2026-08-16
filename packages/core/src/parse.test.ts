@@ -45,3 +45,30 @@ describe('parseBuilderEvent (03 §2 shapes)', () => {
     expect(parseBuilderEvent({ taskId: 'x', metadata: { seq: 1, taskCard: { bad: true } } })).toBeNull() // schema 不符
   })
 })
+
+import { createBuilderClient, CookieAuth } from './index'
+
+describe('client req envelope unwrap', () => {
+  const mkClient = (body: unknown, ct = 'application/json') =>
+    createBuilderClient({
+      restBase: 'https://api.test/web/Builder',
+      auth: new CookieAuth(),
+      transport: { stream: async function* () {}, resubscribe: async function* () {}, cancel: async () => {} },
+      fetchImpl: (async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': ct } })) as unknown as typeof fetch,
+    })
+
+  it('unwraps {code:0,data} envelope', async () => {
+    const c = mkClient({ code: 0, data: { token: 't', previewUrl: 'https://x/?t=t' } })
+    expect(await c.sandbox.previewToken('c1')).toEqual({ token: 't', previewUrl: 'https://x/?t=t' })
+  })
+
+  it('passes through raw shapes (ContentResult endpoints)', async () => {
+    const c = mkClient({ versions: [{ sha: 'a', message: 'm', filesChanged: 1 }] })
+    expect((await c.versions.list('c1'))[0].sha).toBe('a')
+  })
+
+  it('throws on non-zero code', async () => {
+    const c = mkClient({ code: 400, data: null, message: '会话不存在' })
+    await expect(c.sandbox.status('c1')).rejects.toThrow('会话不存在')
+  })
+})
