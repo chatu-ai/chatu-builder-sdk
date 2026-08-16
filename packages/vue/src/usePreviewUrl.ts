@@ -21,11 +21,15 @@ export function usePreviewUrl(client: BuilderClient, conversationId: string, raw
     try {
       const { previewUrl } = await client.sandbox.previewToken(conversationId)
       if (my === seq) {
-        src.value = previewUrl
-        error.value = null
+        src.value = previewUrl || rawPreviewUrl.value
+        error.value = previewUrl ? null : 'preview-token 响应缺少 previewUrl'
       }
     } catch (err) {
-      if (my === seq) error.value = String(err)
+      if (my === seq) {
+        // 取不到 token 时回退原始地址：iframe 会显示授权页并 postMessage → 触发再次 refresh
+        error.value = String(err)
+        src.value = rawPreviewUrl.value
+      }
     }
   }
 
