@@ -49,6 +49,8 @@ export interface BuilderClient {
     heartbeat(conversationId: string, opts: { visible: boolean }): Promise<void | { ok?: boolean; state?: SandboxState | string }>
     /** 一次性预览 token（06 §6.1）：返回可直接作 iframe src 的带 ?t= 的 URL */
     previewToken(conversationId: string): Promise<{ token: string; previewUrl: string }>
+    /** 唤醒/确保沙箱（休眠 → 恢复快照 → 起 dev server；不发起 agent 会话） */
+    wake(conversationId: string): Promise<SandboxStatus>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -116,6 +118,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         body: JSON.stringify(opts),
       }),
       previewToken: id => req(`/${id}/preview-token`),
+      wake: id => req(`/sandbox/${id}/wake`, { method: 'POST' }),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）
