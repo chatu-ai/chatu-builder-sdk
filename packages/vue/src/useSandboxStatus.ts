@@ -46,6 +46,8 @@ export function useSandboxStatus(
     const s = status.value?.state
     if (!s || TRANSITIONAL.has(s)) return pollMs
     if (s === 'hibernated') return hibernatedPollMs
+    // dev server 仍在编译：按过渡态频率轮询，就绪后自动放慢
+    if (status.value?.devServer && status.value.devServer.running && status.value.devServer.ready === false) return pollMs
     return idlePollMs
   }
 

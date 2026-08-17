@@ -33,7 +33,8 @@ export interface BuilderClientOptions {
 export interface SandboxStatus {
   state: SandboxState
   previewUrl?: string
-  devServer?: { running: boolean; lastError?: string }
+  /** dev server：running 且 !ready = 首屏编译中（1c 机型冷启动可能 1–2 分钟） */
+  devServer?: { running: boolean; ready?: boolean; startingForMs?: number | null; lastError?: string | null } | null
 }
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
