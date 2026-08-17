@@ -109,10 +109,25 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
     },
     data: {
+      kv: {
+        list: async () => ({ ok: true, keys: ['todos:1', 'todos:2', 'views'], nextCursor: null }),
+        get: async (_id, key) => ({ ok: true, key, value: key === 'views' ? 42 : { title: 'demo', done: false }, exists: true, ttl: null }),
+        set: async () => ({ ok: true }),
+        remove: async () => ({ ok: true, removed: true }),
+      },
+      storage: {
+        list: async () => ({ ok: true, items: [{ key: 'uploads/a.png', size: 1024, lastModified: new Date().toISOString() }], nextCursor: null }),
+        sign: async (_id, key) => ({ ok: true, url: `https://mock.invalid/${key}` }),
+        uploadUrl: async (_id, key) => ({ ok: true, url: `https://mock.invalid/upload/${key}`, method: 'PUT' as const }),
+        remove: async () => ({ ok: true }),
+      },
       promote: async () => ({ ok: true, kv: { copied: 12, skipped: 0 }, storage: { copied: 2, skipped: 0, bytes: 2048 } }),
       export: async (_id, env) => ({ ok: true, env: env ?? 'prod', kv: [{ key: 'todos:1', value: { a: 1 }, ttl: null }], storage: [{ key: 'img/a.png', size: 10, url: 'https://mock/a.png' }] }),
       usage: async () => ({ ok: true, month: '2026-08', readOnly: false, dev: { raw: { kv_ops: 1234, st_ops: 12, st_put_bytes: 1048576 }, points: 12 }, prod: { raw: {}, points: 0 }, rates: { KvOpsPerPoint: 100 } }),
       access: async () => ({ baseUrl: 'https://api.mock/data/v1', apiKey: 'sk-conv-mock', envs: ['dev', 'prod'], envVars: { CHATU_DATA_URL: 'https://api.mock/data/v1', CHATU_APP_KEY: 'sk-conv-mock', CHATU_DATA_ENV: 'prod' } }),
+    },
+    logs: {
+      tail: async () => ({ lines: ['▲ Next.js 16 dev', '- Local: http://localhost:3001', '✓ Ready in 1.2s'] }),
     },
     export: {
       zip: async () => ({ blob: new Blob(['PK'], { type: 'application/zip' }), fileName: 'mock-app.zip' }),

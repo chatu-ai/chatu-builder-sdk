@@ -163,10 +163,28 @@ export interface BuilderClient {
     access(conversationId: string): Promise<{ baseUrl?: string | null; apiKey: string; envs: string[]; envVars: Record<string, string | null> }>
     /** 本月用量：dev/prod 原始计量与折算点数估算、只读状态、单价 */
     usage(conversationId: string): Promise<DataUsage>
+    /** 资源面板：KV 浏览/编辑（经服务端代理，用户鉴权） */
+    kv: {
+      list(conversationId: string, opts?: { env?: 'dev' | 'prod'; prefix?: string; cursor?: string | null; limit?: number }): Promise<{ ok: boolean; keys: string[]; nextCursor: string | null }>
+      get(conversationId: string, key: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; key: string; value: unknown; exists: boolean; ttl?: number | null }>
+      set(conversationId: string, key: string, value: unknown, opts?: { env?: 'dev' | 'prod'; ex?: number }): Promise<{ ok: boolean }>
+      remove(conversationId: string, key: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; removed?: boolean }>
+    }
+    /** 资源面板：对象存储浏览 */
+    storage: {
+      list(conversationId: string, opts?: { env?: 'dev' | 'prod'; prefix?: string; cursor?: string | null; limit?: number }): Promise<{ ok: boolean; items: Array<{ key: string; size: number; lastModified?: string | null }>; nextCursor: string | null }>
+      sign(conversationId: string, key: string, opts?: { env?: 'dev' | 'prod'; expiresIn?: number; downloadName?: string }): Promise<{ ok: boolean; url: string }>
+      uploadUrl(conversationId: string, key: string, opts?: { env?: 'dev' | 'prod'; contentType?: string; size?: number }): Promise<{ ok: boolean; url: string; method: 'PUT'; headers?: { contentType?: string } | null }>
+      remove(conversationId: string, key: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean }>
+    }
     /** 复制命名空间（默认 dev→prod） */
     promote(conversationId: string, input?: { from?: 'dev' | 'prod'; to?: 'dev' | 'prod'; overwrite?: boolean; kv?: boolean; storage?: boolean }): Promise<{ ok: boolean; error?: string; kv?: { copied: number; skipped: number } | null; storage?: { copied: number; skipped: number; bytes: number } | null }>
     /** 导出数据：KV 键值 + 对象清单（1 小时下载地址） */
     export(conversationId: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; env: string; kv: Array<{ key: string; value: unknown; ttl?: number | null }>; storage: Array<{ key: string; size: number; url?: string | null }> }>
+  }
+  logs: {
+    /** dev server 最近日志（沙箱未运行返回空） */
+    tail(conversationId: string, lines?: number): Promise<{ lines: string[] }>
   }
   export: {
     /**
@@ -265,8 +283,26 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
     data: {
       access: id => req(`/${id}/data-access`),
       usage: id => req(`/${id}/data-usage`),
+      kv: {
+        list: (id, o) => req(`/${id}/data/kv?${qs({ env: o?.env, prefix: o?.prefix, cursor: o?.cursor ?? undefined, limit: o?.limit })}`),
+        get: (id, key, env) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env })}`),
+        set: (id, key, value, o) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env: o?.env })}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value, ex: o?.ex }) }),
+        remove: (id, key, env) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env })}`, { method: 'DELETE' }),
+      },
+      storage: {
+        list: (id, o) => req(`/${id}/data/storage?${qs({ env: o?.env, prefix: o?.prefix, cursor: o?.cursor ?? undefined, limit: o?.limit })}`),
+        sign: (id, key, o) => req(`/${id}/data/storage/sign?${qs({ env: o?.env })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, expiresIn: o?.expiresIn, downloadName: o?.downloadName }) }),
+        uploadUrl: (id, key, o) => req(`/${id}/data/storage/upload-url?${qs({ env: o?.env })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key, contentType: o?.contentType, size: o?.size }) }),
+        remove: (id, key, env) => req(`/${id}/data/storage/${encPath(key)}?${qs({ env })}`, { method: 'DELETE' }),
+      },
       promote: (id, input) => req(`/${id}/data/promote`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input ?? {}) }),
       export: (id, env) => req(`/${id}/data/export?env=${env ?? 'prod'}`),
+    },
+    logs: {
+      tail: async (id, lines) => {
+        const r = await req<{ lines?: string[] } | string[]>(`/${id}/logs?tail=${lines ?? 200}`)
+        return { lines: Array.isArray(r) ? r : (r.lines ?? []) }
+      },
     },
     export: {
       zip: async id => {
@@ -300,8 +336,12 @@ export class BuilderApiError extends Error {
   }
 }
 
-function qs(obj?: Record<string, string | undefined>): string {
+function encPath(key: string): string {
+  return key.split('/').map(encodeURIComponent).join('/')
+}
+
+function qs(obj?: Record<string, string | number | undefined>): string {
   const p = new URLSearchParams()
-  for (const [k, v] of Object.entries(obj ?? {})) if (v !== undefined) p.set(k, v)
+  for (const [k, v] of Object.entries(obj ?? {})) if (v !== undefined && v !== null) p.set(k, String(v))
   return p.toString()
 }
