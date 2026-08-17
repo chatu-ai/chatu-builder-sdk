@@ -85,6 +85,17 @@ export interface GitPushResult {
   credentialId?: string | null
 }
 
+export interface DataUsageEnv { raw: Record<string, number>; points: number }
+export interface DataUsage {
+  ok: boolean
+  month?: string
+  readOnly?: boolean
+  dev?: DataUsageEnv
+  prod?: DataUsageEnv
+  rates?: Record<string, number>
+  error?: string
+}
+
 export interface BuilderClient {
   chat: {
     stream(conversationId: string, prompt: string, opts?: { agentId?: string; attachments?: unknown[] }): AsyncIterable<BuilderEvent>
@@ -124,6 +135,8 @@ export interface BuilderClient {
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
   data: {
     access(conversationId: string): Promise<{ baseUrl?: string | null; apiKey: string; envs: string[]; envVars: Record<string, string | null> }>
+    /** 本月用量：dev/prod 原始计量与折算点数估算、只读状态、单价 */
+    usage(conversationId: string): Promise<DataUsage>
   }
   export: {
     /**
@@ -220,6 +233,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
     },
     data: {
       access: id => req(`/${id}/data-access`),
+      usage: id => req(`/${id}/data-usage`),
     },
     export: {
       zip: async id => {
