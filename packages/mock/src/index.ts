@@ -94,6 +94,9 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       read: async (_id, path) => `// mock content of ${path}\n`,
       downloadUrl: () => 'https://mock.invalid/download.zip',
     },
+    export: {
+      zip: async () => ({ blob: new Blob(['PK'], { type: 'application/zip' }), fileName: 'mock-app.zip' }),
+    },
   }
 }
 

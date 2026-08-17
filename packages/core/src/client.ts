@@ -61,6 +61,13 @@ export interface BuilderClient {
     read(conversationId: string, path: string, opts?: { ref?: string }): Promise<string>
     downloadUrl(conversationId: string): string
   }
+  export: {
+    /**
+     * 导出应用源码 ZIP（含 Dockerfile/DEPLOY.md）。沙箱未运行时服务端返回 409 SANDBOX_NOT_RUNNING —— 调用方先 sandbox.wake()。
+     * 返回 Blob 与建议文件名（取自 Content-Disposition）
+     */
+    zip(conversationId: string): Promise<{ blob: Blob; fileName: string }>
+  }
 }
 
 export function createBuilderClient(options: BuilderClientOptions): BuilderClient {
@@ -136,6 +143,16 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       },
       read: (id, path, opts) => req<string>(`/${id}/files/read?${qs({ path, ...opts })}`),
       downloadUrl: id => `${restBase}/${id}/files/download`,
+    },
+    export: {
+      zip: async id => {
+        const res = await doFetch(`${restBase}/${id}/export/zip`, auth.apply({}))
+        if (!res.ok) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
+        const cd = res.headers.get('content-disposition') ?? ''
+        const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd)
+        const fileName = m?.[1] ? decodeURIComponent(m[1]) : 'app.zip'
+        return { blob: await res.blob(), fileName }
+      },
     },
   }
 }

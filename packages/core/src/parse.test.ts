@@ -72,3 +72,30 @@ describe('client req envelope unwrap', () => {
     await expect(c.sandbox.status('c1')).rejects.toThrow('会话不存在')
   })
 })
+
+describe('client export.zip', () => {
+  it('returns blob and filename from content-disposition', async () => {
+    const c = createBuilderClient({
+      restBase: 'https://api.test/web/Builder',
+      auth: new CookieAuth(),
+      transport: { stream: async function* () {}, resubscribe: async function* () {}, cancel: async () => {} },
+      fetchImpl: (async () => new Response(new Uint8Array([0x50, 0x4b]), {
+        status: 200,
+        headers: { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="my-app.zip"' },
+      })) as unknown as typeof fetch,
+    })
+    const r = await c.export.zip('c1')
+    expect(r.fileName).toBe('my-app.zip')
+    expect(r.blob.size).toBe(2)
+  })
+
+  it('throws BuilderApiError 409 when sandbox not running', async () => {
+    const c = createBuilderClient({
+      restBase: 'https://api.test/web/Builder',
+      auth: new CookieAuth(),
+      transport: { stream: async function* () {}, resubscribe: async function* () {}, cancel: async () => {} },
+      fetchImpl: (async () => new Response('{"error":"SANDBOX_NOT_RUNNING"}', { status: 409 })) as unknown as typeof fetch,
+    })
+    await expect(c.export.zip('c1')).rejects.toMatchObject({ status: 409 })
+  })
+})
