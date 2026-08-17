@@ -107,6 +107,9 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       saveSetting: async (_id, input) => ({ target: input.target, credentialId: input.credentialId ?? null, config: input.config ?? {}, updatedTime: new Date().toISOString() }),
       pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
     },
+    data: {
+      access: async () => ({ baseUrl: 'https://api.mock/data/v1', apiKey: 'sk-conv-mock', envs: ['dev', 'prod'], envVars: { CHATU_DATA_URL: 'https://api.mock/data/v1', CHATU_APP_KEY: 'sk-conv-mock', CHATU_DATA_ENV: 'prod' } }),
+    },
     export: {
       zip: async () => ({ blob: new Blob(['PK'], { type: 'application/zip' }), fileName: 'mock-app.zip' }),
     },

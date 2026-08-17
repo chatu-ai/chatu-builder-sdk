@@ -121,6 +121,10 @@ export interface BuilderClient {
     /** 推送到用户 Git 仓库；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
     pushGit(conversationId: string, input: GitPushInput): Promise<GitPushResult>
   }
+  /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
+  data: {
+    access(conversationId: string): Promise<{ baseUrl?: string | null; apiKey: string; envs: string[]; envVars: Record<string, string | null> }>
+  }
   export: {
     /**
      * 导出应用源码 ZIP（含 Dockerfile/DEPLOY.md）。沙箱未运行时服务端返回 409 SANDBOX_NOT_RUNNING —— 调用方先 sandbox.wake()。
@@ -213,6 +217,9 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       settings: id => req(`/${id}/deploy-settings`),
       saveSetting: (id, input) => req(`/${id}/deploy-settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+    },
+    data: {
+      access: id => req(`/${id}/data-access`),
     },
     export: {
       zip: async id => {
