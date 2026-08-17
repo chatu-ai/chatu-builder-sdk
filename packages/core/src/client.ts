@@ -96,6 +96,30 @@ export interface DataUsage {
   error?: string
 }
 
+export interface DeployInput {
+  provider: 'edgeone'
+  projectName: string
+  credentialId?: string
+  token?: string
+  save?: boolean
+  label?: string
+  env?: 'production' | 'preview'
+  includeAppEnv?: boolean
+  includeDataAccess?: boolean
+}
+export interface DeployResult {
+  ok: boolean
+  error?: string
+  state?: string
+  projectName?: string
+  env?: string
+  url?: string
+  output?: string
+  envVarsApplied?: number
+  envVarsFailed?: string[]
+  credentialId?: string | null
+}
+
 export interface BuilderClient {
   chat: {
     stream(conversationId: string, prompt: string, opts?: { agentId?: string; attachments?: unknown[] }): AsyncIterable<BuilderEvent>
@@ -131,6 +155,8 @@ export interface BuilderClient {
     saveSetting(conversationId: string, input: { target: string; credentialId?: string | null; config?: Record<string, unknown> }): Promise<DeploySettingView>
     /** 推送到用户 Git 仓库；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
     pushGit(conversationId: string, input: GitPushInput): Promise<GitPushResult>
+    /** 一键部署（P1：EdgeOne Pages）；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
+    deploy(conversationId: string, input: DeployInput): Promise<DeployResult>
   }
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
   data: {
@@ -230,6 +256,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       settings: id => req(`/${id}/deploy-settings`),
       saveSetting: (id, input) => req(`/${id}/deploy-settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      deploy: (id, input) => req(`/${id}/export/deploy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
     },
     data: {
       access: id => req(`/${id}/data-access`),

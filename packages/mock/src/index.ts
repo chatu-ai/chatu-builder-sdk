@@ -105,6 +105,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
     deploy: {
       settings: async () => [{ target: 'git', credentialId: 'cred-1', config: { remoteUrl: 'https://github.com/demo/app.git', branch: 'main' }, updatedTime: new Date().toISOString() }],
       saveSetting: async (_id, input) => ({ target: input.target, credentialId: input.credentialId ?? null, config: input.config ?? {}, updatedTime: new Date().toISOString() }),
+      deploy: async (_id, input) => ({ ok: true, projectName: input.projectName, env: input.env ?? 'production', url: `https://${input.projectName}.edgeone.app`, output: 'mock deploy ok', envVarsApplied: 3 }),
       pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
     },
     data: {
