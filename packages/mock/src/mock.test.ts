@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { BuilderEvent } from '@chatu-builder-sdk/core'
+import type { BuilderEvent } from '@chatu-ai/builder-sdk'
 import { createMockBuilderClient, scenario1, scenario2 } from './index'
 
 async function collect(src: AsyncIterable<BuilderEvent>): Promise<BuilderEvent[]> {

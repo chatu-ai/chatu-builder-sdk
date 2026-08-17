@@ -5,8 +5,8 @@
  */
 import type {
   BuilderClient, BuilderEvent, FileNode, SandboxStatus, VersionInfo,
-} from '@chatu-builder-sdk/core'
-import { resilientStream } from '@chatu-builder-sdk/core'
+} from '@chatu-ai/builder-sdk'
+import { resilientStream } from '@chatu-ai/builder-sdk'
 
 export interface MockScriptStep {
   event: BuilderEvent

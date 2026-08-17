@@ -1,17 +1,52 @@
 {
-  "name": "@chatu-builder-sdk/vue",
+  "name": "@chatu-ai/builder-sdk-vue",
   "version": "0.0.1",
-  "description": "Vue 3 bindings: useBuilderChat / useSandboxStatus / useBuilderFiles + headless components",
+  "description": "Vue 3 bindings for @chatu-ai/builder-sdk: useBuilderChat / useSandboxStatus / usePreviewUrl",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chatu-ai/chatu-builder-sdk.git",
+    "directory": "packages/vue"
+  },
+  "homepage": "https://github.com/chatu-ai/chatu-builder-sdk/tree/main/packages/vue#readme",
+  "bugs": "https://github.com/chatu-ai/chatu-builder-sdk/issues",
+  "keywords": [
+    "chatu",
+    "builder",
+    "ai",
+    "app-builder",
+    "sdk",
+    "vue",
+    "composables"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@chatu-builder-sdk/core": "workspace:*"
+    "@chatu-ai/builder-sdk": "workspace:*"
   },
   "peerDependencies": {
     "vue": "^3.4.0"
@@ -20,6 +55,6 @@
     "typescript": "^5.7.0",
     "vue": "^3.5.0",
     "vitest": "^3.0.0",
-    "@chatu-builder-sdk/mock": "workspace:*"
+    "@chatu-ai/builder-sdk-mock": "workspace:*"
   }
 }

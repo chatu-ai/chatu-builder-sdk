@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createMockBuilderClient, scenario1, scenario2 } from '@chatu-builder-sdk/mock'
+import { createMockBuilderClient, scenario1, scenario2 } from '@chatu-ai/builder-sdk-mock'
 import { useBuilderChat } from './useBuilderChat'
 import { useSandboxStatus } from './useSandboxStatus'
 import { createInitialState, reduceEvent } from './reducer'

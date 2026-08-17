@@ -1,5 +1,5 @@
 import { ref, watch, type Ref } from 'vue'
-import type { BuilderClient } from '@chatu-builder-sdk/core'
+import type { BuilderClient } from '@chatu-ai/builder-sdk'
 
 /**
  * 预览地址（带一次性 token 的 iframe src，06 §6.1）：

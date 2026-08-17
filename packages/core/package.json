@@ -1,11 +1,45 @@
 {
-  "name": "@chatu-builder-sdk/core",
+  "name": "@chatu-ai/builder-sdk",
   "version": "0.0.1",
-  "description": "Builder client core: A2A + REST client, event schemas (zod), seq resume",
+  "description": "ChatU Builder client SDK core: REST + streaming client, zod event schemas, seq resume",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "exports": { ".": "./dist/index.js" },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chatu-ai/chatu-builder-sdk.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/chatu-ai/chatu-builder-sdk/tree/main/packages/core#readme",
+  "bugs": "https://github.com/chatu-ai/chatu-builder-sdk/issues",
+  "keywords": [
+    "chatu",
+    "builder",
+    "ai",
+    "app-builder",
+    "sdk",
+    "a2a",
+    "sse"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

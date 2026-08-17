@@ -27,7 +27,7 @@ importers:
 
   packages/mock:
     dependencies:
-      '@chatu-builder-sdk/core':
+      '@chatu-ai/builder-sdk':
         specifier: workspace:*
         version: link:../core
     devDependencies:
@@ -40,11 +40,11 @@ importers:
 
   packages/vue:
     dependencies:
-      '@chatu-builder-sdk/core':
+      '@chatu-ai/builder-sdk':
         specifier: workspace:*
         version: link:../core
     devDependencies:
-      '@chatu-builder-sdk/mock':
+      '@chatu-ai/builder-sdk-mock':
         specifier: workspace:*
         version: link:../mock
       typescript:

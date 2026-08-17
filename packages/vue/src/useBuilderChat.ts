@@ -1,5 +1,5 @@
 import { computed, reactive, readonly, ref } from 'vue'
-import type { BuilderClient } from '@chatu-builder-sdk/core'
+import type { BuilderClient } from '@chatu-ai/builder-sdk'
 import { createInitialState, reduceEvent, type BuilderUiState } from './reducer'
 
 /**

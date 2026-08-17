@@ -2,7 +2,7 @@
  * 事件 → UI 状态归约（08 §3 规则的纯函数实现，框架无关、可独立测试）
  * vue 层只做响应式包装。
  */
-import type { BuilderEvent, SandboxState } from '@chatu-builder-sdk/core'
+import type { BuilderEvent, SandboxState } from '@chatu-ai/builder-sdk'
 
 export interface TaskCardUi {
   id: string

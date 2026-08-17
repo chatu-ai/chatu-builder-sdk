@@ -1,5 +1,5 @@
 import { onScopeDispose, readonly, ref } from 'vue'
-import type { BuilderClient, SandboxStatus } from '@chatu-builder-sdk/core'
+import type { BuilderClient, SandboxStatus } from '@chatu-ai/builder-sdk'
 
 export interface SandboxStatusOptions {
   /** 过渡态（创建/预热/恢复/快照/未知）轮询间隔，默认 3000ms */

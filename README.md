@@ -1,16 +1,34 @@
 # chatu-builder-sdk
 
-ChatU Builder 客户端 SDK monorepo。设计文档见 `~/tfs/v0/003.技术方案/`（04 §1 SDK 体系、08 §2 API 面、03 §2 事件 schema）。
+Client SDKs for the ChatU **App Builder** — AI-driven app generation with a live sandbox preview. Published on npm under the `@chatu-ai` scope (MIT).
+
+| Package | npm |
+| --- | --- |
+| `@chatu-ai/builder-sdk` (core) | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk)](https://www.npmjs.com/package/@chatu-ai/builder-sdk) |
+| `@chatu-ai/builder-sdk-vue` | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk-vue)](https://www.npmjs.com/package/@chatu-ai/builder-sdk-vue) |
+| `@chatu-ai/builder-sdk-mock` | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk-mock)](https://www.npmjs.com/package/@chatu-ai/builder-sdk-mock) |
+
+## 发布流程
+
+```bash
+pnpm release:version 0.1.0     # 写入三个包的 version（不打 tag）
+git commit -am "release: v0.1.0" && git tag v0.1.0 && git push --tags
+```
+
+推 tag 后 GitHub Actions `Release` 自动 build/test 并 `pnpm -r publish`（需仓库 Secret `NPM_TOKEN`）。也可本地 `npm login` 后执行 `pnpm release:publish`。
+
+---
+
 
 ## 包
 
 | 包 | 说明 | 阶段 |
 | --- | --- | --- |
-| `@chatu-builder-sdk/core` | A2A + REST client、zod 事件 schema（单一事实源）、seq 去重与断线重连 | P0 |
-| `@chatu-builder-sdk/mock` | 脚本化事件回放（含断线注入），供 UI 先行开发 | P0 |
-| `@chatu-builder-sdk/vue` | Vue 3 组合式 API 绑定 | P0–P1 |
-| `@chatu-builder-sdk/react` | React 绑定（对外开放主力） | P1 末–P2 |
-| `@chatu-builder-sdk/embed` / `ai-tools` | 嵌入 widget / MCP 工具集 | P2 |
+| `@chatu-ai/builder-sdk` | A2A + REST client、zod 事件 schema（单一事实源）、seq 去重与断线重连 | P0 |
+| `@chatu-ai/builder-sdk-mock` | 脚本化事件回放（含断线注入），供 UI 先行开发 | P0 |
+| `@chatu-ai/builder-sdk-vue` | Vue 3 组合式 API 绑定 | P0–P1 |
+| `@chatu-ai/builder-sdk-react` | React 绑定（对外开放主力） | P1 末–P2 |
+| `@chatu-ai/builder-sdk-embed` / `ai-tools` | 嵌入 widget / MCP 工具集 | P2 |
 
 ## 设计约束
 

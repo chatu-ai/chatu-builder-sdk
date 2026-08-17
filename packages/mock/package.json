@@ -1,17 +1,52 @@
 {
-  "name": "@chatu-builder-sdk/mock",
+  "name": "@chatu-ai/builder-sdk-mock",
   "version": "0.0.1",
-  "description": "Mock BuilderClient: scripted event replay with latency & disconnect injection (M4 UI dev)",
+  "description": "Mock BuilderClient for @chatu-ai/builder-sdk: scripted event replay with latency & disconnect injection",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chatu-ai/chatu-builder-sdk.git",
+    "directory": "packages/mock"
+  },
+  "homepage": "https://github.com/chatu-ai/chatu-builder-sdk/tree/main/packages/mock#readme",
+  "bugs": "https://github.com/chatu-ai/chatu-builder-sdk/issues",
+  "keywords": [
+    "chatu",
+    "builder",
+    "ai",
+    "app-builder",
+    "sdk",
+    "mock",
+    "testing"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@chatu-builder-sdk/core": "workspace:*"
+    "@chatu-ai/builder-sdk": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
