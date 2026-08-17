@@ -18,6 +18,7 @@ const src = await storage.url('avatars/u1.png', { expiresIn: 3600 })         // 
 | Env | Driver | Notes |
 | --- | --- | --- |
 | `CHATU_DATA_URL` + `CHATU_APP_KEY` (+ `CHATU_DATA_ENV=dev\|prod`) | **platform** — ChatU hosted Data API, metered | set automatically in the Builder preview; copy from the publish panel for your own server |
+| `REDIS_URL` and/or `S3_BUCKET` (+ `S3_ENDPOINT` `S3_REGION` `S3_ACCESS_KEY` `S3_SECRET_KEY` `S3_PREFIX`) | **byo** — your own Redis / S3-compatible bucket (Tencent COS, MinIO, AWS) | install optional deps: `npm i ioredis @aws-sdk/client-s3 @aws-sdk/s3-request-presigner` |
 | none | **memory** — in-process, lost on restart | local dev / fallback |
 
 Never expose `CHATU_APP_KEY` to the browser. MIT.

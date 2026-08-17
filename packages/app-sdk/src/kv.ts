@@ -1,5 +1,6 @@
 import { resolveConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
+import { byoKv } from './byo.js'
 
 export interface KvSetOptions { /** 过期秒数 */ ex?: number }
 export interface KvListResult { keys: string[]; nextCursor: string | null }
@@ -74,8 +75,8 @@ let cached: { key: string; client: KvClient } | null = null
 /** 按当前配置取 KV 客户端（惰性、缓存；configure() 后自动重建） */
 export function getKv(): KvClient {
   const cfg = resolveConfig()
-  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : 'memory'
-  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformKv(cfg) : memoryKv() }
+  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.redisUrl ?? ''}|${cfg.kvPrefix}` : 'memory'
+  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformKv(cfg) : cfg.kind === 'byo' ? byoKv(cfg, memoryKv()) : memoryKv() }
   return cached.client
 }
 

@@ -1,5 +1,6 @@
 import { resolveConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
+import { byoStorage } from './byo.js'
 
 export interface StorageObject { key: string; size: number; lastModified?: string | null }
 export interface StorageListResult { items: StorageObject[]; nextCursor: string | null }
@@ -102,8 +103,8 @@ let cached: { key: string; client: StorageClient } | null = null
 
 export function getStorage(): StorageClient {
   const cfg = resolveConfig()
-  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : 'memory'
-  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformStorage(cfg) : memoryStorage() }
+  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : 'memory'
+  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformStorage(cfg) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : memoryStorage() }
   return cached.client
 }
 

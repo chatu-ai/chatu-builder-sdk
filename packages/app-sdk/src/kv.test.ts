@@ -38,3 +38,17 @@ d('platform driver', () => {
     await expect(kv.get('bad*')).rejects.toMatchObject({ code: 'INVALID_KEY', status: 400 })
   })
 })
+
+d('byo driver', () => {
+  it('resolves from REDIS_URL / S3_BUCKET and reports missing optional deps clearly', async () => {
+    const proc = (globalThis as any).process
+    proc.env.REDIS_URL = 'redis://127.0.0.1:1'
+    proc.env.S3_BUCKET = 'b'
+    configure({})
+    expect(describe()).toEqual({ driver: 'byo', kv: 'redis', storage: 's3' })
+    await expect(kv.get('x')).rejects.toThrow(/ioredis|ECONNREFUSED|connect/i)
+    delete proc.env.REDIS_URL
+    delete proc.env.S3_BUCKET
+    configure({ driver: 'memory' })
+  })
+})
