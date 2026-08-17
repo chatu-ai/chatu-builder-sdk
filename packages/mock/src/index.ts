@@ -109,6 +109,8 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
     },
     data: {
+      promote: async () => ({ ok: true, kv: { copied: 12, skipped: 0 }, storage: { copied: 2, skipped: 0, bytes: 2048 } }),
+      export: async (_id, env) => ({ ok: true, env: env ?? 'prod', kv: [{ key: 'todos:1', value: { a: 1 }, ttl: null }], storage: [{ key: 'img/a.png', size: 10, url: 'https://mock/a.png' }] }),
       usage: async () => ({ ok: true, month: '2026-08', readOnly: false, dev: { raw: { kv_ops: 1234, st_ops: 12, st_put_bytes: 1048576 }, points: 12 }, prod: { raw: {}, points: 0 }, rates: { KvOpsPerPoint: 100 } }),
       access: async () => ({ baseUrl: 'https://api.mock/data/v1', apiKey: 'sk-conv-mock', envs: ['dev', 'prod'], envVars: { CHATU_DATA_URL: 'https://api.mock/data/v1', CHATU_APP_KEY: 'sk-conv-mock', CHATU_DATA_ENV: 'prod' } }),
     },

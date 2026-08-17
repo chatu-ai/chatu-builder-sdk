@@ -163,6 +163,10 @@ export interface BuilderClient {
     access(conversationId: string): Promise<{ baseUrl?: string | null; apiKey: string; envs: string[]; envVars: Record<string, string | null> }>
     /** 本月用量：dev/prod 原始计量与折算点数估算、只读状态、单价 */
     usage(conversationId: string): Promise<DataUsage>
+    /** 复制命名空间（默认 dev→prod） */
+    promote(conversationId: string, input?: { from?: 'dev' | 'prod'; to?: 'dev' | 'prod'; overwrite?: boolean; kv?: boolean; storage?: boolean }): Promise<{ ok: boolean; error?: string; kv?: { copied: number; skipped: number } | null; storage?: { copied: number; skipped: number; bytes: number } | null }>
+    /** 导出数据：KV 键值 + 对象清单（1 小时下载地址） */
+    export(conversationId: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; env: string; kv: Array<{ key: string; value: unknown; ttl?: number | null }>; storage: Array<{ key: string; size: number; url?: string | null }> }>
   }
   export: {
     /**
@@ -261,6 +265,8 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
     data: {
       access: id => req(`/${id}/data-access`),
       usage: id => req(`/${id}/data-usage`),
+      promote: (id, input) => req(`/${id}/data/promote`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input ?? {}) }),
+      export: (id, env) => req(`/${id}/data/export?env=${env ?? 'prod'}`),
     },
     export: {
       zip: async id => {
