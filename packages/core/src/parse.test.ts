@@ -99,3 +99,22 @@ describe('client export.zip', () => {
     await expect(c.export.zip('c1')).rejects.toMatchObject({ status: 409 })
   })
 })
+
+describe('client credentials/deploy', () => {
+  it('posts pushGit body and unwraps envelope', async () => {
+    let captured: { url: string; init?: RequestInit } | undefined
+    const c = createBuilderClient({
+      restBase: 'https://api.test/web/Builder',
+      auth: new CookieAuth(),
+      transport: { stream: async function* () {}, resubscribe: async function* () {}, cancel: async () => {} },
+      fetchImpl: (async (url: string, init?: RequestInit) => {
+        captured = { url, init }
+        return new Response(JSON.stringify({ code: 0, data: { ok: true, sha: 'abc', branch: 'main' } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }) as unknown as typeof fetch,
+    })
+    const r = await c.deploy.pushGit('c1', { remoteUrl: 'https://github.com/a/b.git', credentialId: 'cred-1' })
+    expect(r.ok).toBe(true)
+    expect(captured?.url).toBe('https://api.test/web/Builder/c1/export/git')
+    expect(JSON.parse(String(captured?.init?.body))).toMatchObject({ remoteUrl: 'https://github.com/a/b.git', credentialId: 'cred-1' })
+  })
+})

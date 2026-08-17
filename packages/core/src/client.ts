@@ -38,6 +38,53 @@ export interface SandboxStatus {
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
 
+export type CredentialScope = 'organization' | 'user' | 'conversation'
+export interface CredentialView {
+  id: string
+  scope: CredentialScope
+  provider: string
+  label: string
+  hint?: string | null
+  meta?: Record<string, unknown> | null
+  createdTime: string
+  lastUsedTime?: string | null
+  readOnly: boolean
+}
+export interface DeploySettingView {
+  target: string
+  credentialId?: string | null
+  config: Record<string, unknown>
+  lastRunTime?: string | null
+  lastRunStatus?: string | null
+  lastRunMessage?: string | null
+  lastRunUrl?: string | null
+  updatedTime: string
+}
+export interface GitPushInput {
+  remoteUrl: string
+  branch?: string
+  /** 二选一：凭据库 id */
+  credentialId?: string
+  /** 二选一：仅本次使用的令牌；save=true 时同时存为用户级凭据 */
+  token?: string
+  username?: string
+  save?: boolean
+  label?: string
+  force?: boolean
+  commitMessage?: string
+}
+export interface GitPushResult {
+  ok: boolean
+  error?: string
+  state?: string
+  remoteUrl?: string
+  branch?: string
+  sha?: string
+  output?: string
+  webUrl?: string
+  credentialId?: string | null
+}
+
 export interface BuilderClient {
   chat: {
     stream(conversationId: string, prompt: string, opts?: { agentId?: string; attachments?: unknown[] }): AsyncIterable<BuilderEvent>
@@ -60,6 +107,19 @@ export interface BuilderClient {
     tree(conversationId: string, opts?: { path?: string; ref?: string }): Promise<FileNode[]>
     read(conversationId: string, path: string, opts?: { ref?: string }): Promise<string>
     downloadUrl(conversationId: string): string
+  }
+  /** 凭据库（技术方案 14 §2）：列表脱敏，永不返回明文 */
+  credentials: {
+    list(conversationId?: string): Promise<CredentialView[]>
+    save(input: { provider: string; label: string; secret: string; scope: 'user' | 'conversation'; conversationId?: string; meta?: Record<string, unknown> }): Promise<CredentialView>
+    remove(id: string): Promise<void>
+  }
+  /** 设置库 + 发布动作 */
+  deploy: {
+    settings(conversationId: string): Promise<DeploySettingView[]>
+    saveSetting(conversationId: string, input: { target: string; credentialId?: string | null; config?: Record<string, unknown> }): Promise<DeploySettingView>
+    /** 推送到用户 Git 仓库；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
+    pushGit(conversationId: string, input: GitPushInput): Promise<GitPushResult>
   }
   export: {
     /**
@@ -143,6 +203,16 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       },
       read: (id, path, opts) => req<string>(`/${id}/files/read?${qs({ path, ...opts })}`),
       downloadUrl: id => `${restBase}/${id}/files/download`,
+    },
+    credentials: {
+      list: conversationId => req(`/credentials${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`),
+      save: input => req('/credentials', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      remove: async id => { await req(`/credentials/${id}`, { method: 'DELETE' }) },
+    },
+    deploy: {
+      settings: id => req(`/${id}/deploy-settings`),
+      saveSetting: (id, input) => req(`/${id}/deploy-settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
     },
     export: {
       zip: async id => {

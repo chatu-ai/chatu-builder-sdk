@@ -94,6 +94,19 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       read: async (_id, path) => `// mock content of ${path}\n`,
       downloadUrl: () => 'https://mock.invalid/download.zip',
     },
+    credentials: {
+      list: async () => [
+        { id: 'cred-1', scope: 'user', provider: 'github', label: '我的 GitHub', hint: 'ab12', createdTime: new Date().toISOString(), readOnly: false },
+        { id: 'cred-org', scope: 'organization', provider: 'git-https', label: '公司 GitLab 机器人', hint: 'zz99', createdTime: new Date().toISOString(), readOnly: true },
+      ],
+      save: async input => ({ id: 'cred-new', scope: input.scope, provider: input.provider, label: input.label, hint: input.secret.slice(-4), createdTime: new Date().toISOString(), readOnly: false }),
+      remove: async () => {},
+    },
+    deploy: {
+      settings: async () => [{ target: 'git', credentialId: 'cred-1', config: { remoteUrl: 'https://github.com/demo/app.git', branch: 'main' }, updatedTime: new Date().toISOString() }],
+      saveSetting: async (_id, input) => ({ target: input.target, credentialId: input.credentialId ?? null, config: input.config ?? {}, updatedTime: new Date().toISOString() }),
+      pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
+    },
     export: {
       zip: async () => ({ blob: new Blob(['PK'], { type: 'application/zip' }), fileName: 'mock-app.zip' }),
     },
