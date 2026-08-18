@@ -233,6 +233,14 @@ export interface BuilderClient {
       set(conversationId: string, key: string, value: unknown, opts?: { env?: 'dev' | 'prod'; ex?: number }): Promise<{ ok: boolean }>
       remove(conversationId: string, key: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; removed?: boolean }>
     }
+    /** 资源面板：文档集合浏览（技术方案 19） */
+    db: {
+      collections(conversationId: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; collections: Array<{ name: string; count: number }> }>
+      query(conversationId: string, collection: string, opts?: { env?: 'dev' | 'prod'; filter?: Record<string, unknown>; sort?: Record<string, 1 | -1>; skip?: number; limit?: number }): Promise<{ ok: boolean; docs: Array<Record<string, unknown>>; total: number; nextSkip: number | null }>
+      replace(conversationId: string, collection: string, id: string, doc: Record<string, unknown>, env?: 'dev' | 'prod'): Promise<{ ok: boolean; doc?: Record<string, unknown> }>
+      remove(conversationId: string, collection: string, id: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; removed?: boolean }>
+      drop(conversationId: string, collection: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; dropped?: boolean }>
+    }
     /** 资源面板：对象存储浏览 */
     storage: {
       list(conversationId: string, opts?: { env?: 'dev' | 'prod'; prefix?: string; cursor?: string | null; limit?: number }): Promise<{ ok: boolean; items: Array<{ key: string; size: number; lastModified?: string | null }>; nextCursor: string | null }>
@@ -241,7 +249,7 @@ export interface BuilderClient {
       remove(conversationId: string, key: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean }>
     }
     /** 复制命名空间（默认 dev→prod） */
-    promote(conversationId: string, input?: { from?: 'dev' | 'prod'; to?: 'dev' | 'prod'; overwrite?: boolean; kv?: boolean; storage?: boolean }): Promise<{ ok: boolean; error?: string; kv?: { copied: number; skipped: number } | null; storage?: { copied: number; skipped: number; bytes: number } | null }>
+    promote(conversationId: string, input?: { from?: 'dev' | 'prod'; to?: 'dev' | 'prod'; overwrite?: boolean; kv?: boolean; storage?: boolean; db?: boolean }): Promise<{ ok: boolean; error?: string; kv?: { copied: number; skipped: number } | null; storage?: { copied: number; skipped: number; bytes: number } | null; db?: { copied: number; skipped: number } | null }>
     /** 导出数据：KV 键值 + 对象清单（1 小时下载地址） */
     export(conversationId: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; env: string; kv: Array<{ key: string; value: unknown; ttl?: number | null }>; storage: Array<{ key: string; size: number; url?: string | null }> }>
   }
@@ -364,6 +372,13 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         get: (id, key, env) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env })}`),
         set: (id, key, value, o) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env: o?.env })}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value, ex: o?.ex }) }),
         remove: (id, key, env) => req(`/${id}/data/kv/${encPath(key)}?${qs({ env })}`, { method: 'DELETE' }),
+      },
+      db: {
+        collections: (id, env) => req(`/${id}/data/db?${qs({ env })}`),
+        query: (id, coll, o) => req(`/${id}/data/db/${encPath(coll)}/query?${qs({ env: o?.env })}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filter: o?.filter, sort: o?.sort, skip: o?.skip, limit: o?.limit }) }),
+        replace: (id, coll, docId, doc, env) => req(`/${id}/data/db/${encPath(coll)}/${encPath(docId)}?${qs({ env })}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(doc) }),
+        remove: (id, coll, docId, env) => req(`/${id}/data/db/${encPath(coll)}/${encPath(docId)}?${qs({ env })}`, { method: 'DELETE' }),
+        drop: (id, coll, env) => req(`/${id}/data/db/${encPath(coll)}?${qs({ env })}`, { method: 'DELETE' }),
       },
       storage: {
         list: (id, o) => req(`/${id}/data/storage?${qs({ env: o?.env, prefix: o?.prefix, cursor: o?.cursor ?? undefined, limit: o?.limit })}`),

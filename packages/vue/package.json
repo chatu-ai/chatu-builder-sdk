@@ -1,6 +1,6 @@
 {
   "name": "@chatu-ai/builder-sdk-vue",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Vue 3 bindings for @chatu-ai/builder-sdk: useBuilderChat / useSandboxStatus / usePreviewUrl",
   "license": "MIT",
   "type": "module",

@@ -137,6 +137,13 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
         set: async () => ({ ok: true }),
         remove: async () => ({ ok: true, removed: true }),
       },
+      db: {
+        collections: async () => ({ ok: true, collections: [{ name: 'todos', count: 2 }] }),
+        query: async () => ({ ok: true, docs: [{ _id: 'a1', _createdAt: Date.now(), _updatedAt: Date.now(), title: 'mock todo', done: false }], total: 1, nextSkip: null }),
+        replace: async (_id, _coll, docId, doc) => ({ ok: true, doc: { _id: docId, ...doc } }),
+        remove: async () => ({ ok: true, removed: true }),
+        drop: async () => ({ ok: true, dropped: true }),
+      },
       storage: {
         list: async () => ({ ok: true, items: [{ key: 'uploads/a.png', size: 1024, lastModified: new Date().toISOString() }], nextCursor: null }),
         sign: async (_id, key) => ({ ok: true, url: `https://mock.invalid/${key}` }),
