@@ -144,6 +144,8 @@ export interface BuilderClient {
     tree(conversationId: string, opts?: { path?: string; ref?: string; depth?: number }): Promise<FileNode[]>
     read(conversationId: string, path: string, opts?: { ref?: string }): Promise<string>
     downloadUrl(conversationId: string): string
+    /** 原样下载单个文件（图片/PDF 等预览用），返回 Blob 与 content-type */
+    download(conversationId: string, path: string): Promise<{ blob: Blob; contentType: string }>
   }
   /** 凭据库（技术方案 14 §2）：列表脱敏，永不返回明文 */
   credentials: {
@@ -270,6 +272,11 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       },
       read: (id, path, opts) => req<string>(`/${id}/files/read?${qs({ path, ...opts })}`),
       downloadUrl: id => `${restBase}/${id}/files/download`,
+      download: async (id, path) => {
+        const res = await doFetch(`${restBase}/${id}/files/download?path=${encodeURIComponent(path)}`, auth.apply({}))
+        if (!res.ok) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
+        return { blob: await res.blob(), contentType: res.headers.get('content-type') ?? 'application/octet-stream' }
+      },
     },
     credentials: {
       list: conversationId => req(`/credentials${conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : ''}`),
