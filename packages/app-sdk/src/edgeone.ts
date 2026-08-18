@@ -3,6 +3,7 @@ import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
 import type { KvClient } from './kv.js'
 import type { StorageClient, StorageObject } from './storage.js'
+import { applyUpdate, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
 
 /**
  * EdgeOne Pages Blob 驱动（部署到 EdgeOne Pages 时使用；kv 与 storage 都落在 Pages Blob）
@@ -19,7 +20,7 @@ type Store = {
   get(key: string, opts?: { type?: string; consistency?: 'eventual' | 'strong' }): Promise<any>
   getMetadata(key: string, opts?: { consistency?: 'eventual' | 'strong' }): Promise<{ contentType?: string; etag?: string; headers?: Record<string, string> } | null>
   delete(key: string): Promise<void>
-  list(opts?: { prefix?: string; cursor?: string; limit?: number; paginate?: boolean; consistency?: 'eventual' | 'strong' }): Promise<{ blobs: Array<{ key: string; etag: string }>; cursor?: string }>
+  list(opts?: { prefix?: string; cursor?: string; limit?: number; paginate?: boolean; directories?: boolean; consistency?: 'eventual' | 'strong' }): Promise<{ blobs: Array<{ key: string; etag: string }>; directories?: string[]; cursor?: string }>
   createUploadUrl(key: string, opts?: { expireSeconds?: number; contentType?: string }): Promise<{ url: string; key: string; expiresAt: number }>
 }
 
@@ -172,6 +173,101 @@ export function edgeoneStorage(cfg: EdgeoneConfig): StorageClient {
         r = await s.list({ prefix, cursor: opts?.cursor ?? undefined, limit: opts?.limit ?? 100, paginate: false, consistency: 'strong' })
       } catch (e) { throw wrapErr(e, 'storage list') }
       return { items: r.blobs.map(b => ({ key: b.key, size: 0, lastModified: null })), nextCursor: r.cursor ?? null }
+    },
+  }
+}
+
+/**
+ * EdgeOne Pages Blob 上的文档集合：`db/{coll}/{id}` 一个对象一个文档，
+ * 查询用 list(prefix) 拉全量后在内存过滤/排序/分页（与平台驱动同语义，适合万级以内）。
+ */
+export function edgeoneDb(cfg: EdgeoneConfig): DbClient {
+  const getStore = storeFactory(cfg)
+  const store = () => getStore(cfg.kvStore)
+  const docKey = (coll: string, id: string) => `db/${coll}/${id}`
+
+  async function all<T>(coll: string): Promise<Doc<T>[]> {
+    const s = await store()
+    let listed: { blobs: Array<{ key: string }> }
+    try {
+      listed = await s.list({ prefix: `db/${coll}/`, paginate: true, consistency: 'strong' })
+    } catch (e) { throw wrapErr(e, 'db list') }
+    const docs: Array<Doc<T> | null> = await Promise.all(
+      listed.blobs.map(async b => {
+        try { return ((await s.get(b.key, { type: 'json', consistency: 'strong' })) as Doc<T> | null) ?? null } catch { return null }
+      }),
+    )
+    return docs.filter((d): d is Doc<T> => d !== null && typeof d === 'object')
+  }
+
+  return {
+    async collections() {
+      const s = await store()
+      const listed = await s.list({ prefix: 'db/', directories: true, paginate: true, consistency: 'strong' })
+      const counts = new Map<string, number>()
+      for (const b of listed.blobs) {
+        const name = b.key.slice(3, b.key.indexOf('/', 3))
+        if (name) counts.set(name, (counts.get(name) ?? 0) + 1)
+      }
+      return [...counts.entries()].map(([name, count]) => ({ name, count }))
+    },
+    collection<T>(coll: string): Collection<T> {
+      return {
+        async insert(doc) {
+          const s = await store()
+          const now = Date.now()
+          const id = typeof doc._id === 'string' ? doc._id : newDocId()
+          const saved = withMeta<T>(doc as Record<string, unknown>, id, now, now)
+          try { await s.setJSON(docKey(coll, id), saved) } catch (e) { throw wrapErr(e, 'db insert') }
+          return saved
+        },
+        async insertMany(docs) {
+          const ids: string[] = []
+          for (const d of docs) ids.push((await this.insert(d))._id)
+          return ids
+        },
+        async get(id) {
+          const s = await store()
+          try { return ((await s.get(docKey(coll, id), { type: 'json', consistency: 'strong' })) as Doc<T> | null) ?? null } catch (e) { throw wrapErr(e, 'db get') }
+        },
+        async find(options) { return queryDocs(await all<T>(coll), options) },
+        async findOne(filter, options) { return (await this.find({ ...options, filter, limit: 1 })).docs[0] ?? null },
+        async count(filter) { return (await this.find({ filter, limit: 200 })).total },
+        async update(id, input) {
+          const cur = await this.get(id)
+          if (!cur) {
+            if (!input.upsert) return null
+            return this.insert({ ...(input.set ?? {}), _id: id } as never)
+          }
+          const next = applyUpdate(cur, input)
+          const s = await store()
+          try { await s.setJSON(docKey(coll, id), next) } catch (e) { throw wrapErr(e, 'db update') }
+          return next
+        },
+        async replace(id, doc) {
+          const cur = await this.get(id)
+          const saved = withMeta<T>(doc as Record<string, unknown>, id, cur?._createdAt ?? Date.now(), Date.now())
+          const s = await store()
+          try { await s.setJSON(docKey(coll, id), saved) } catch (e) { throw wrapErr(e, 'db replace') }
+          return saved
+        },
+        async delete(id) {
+          const existed = (await this.get(id)) !== null
+          const s = await store()
+          try { await s.delete(docKey(coll, id)) } catch (e) { throw wrapErr(e, 'db delete') }
+          return existed
+        },
+        async deleteMany(filter) {
+          const s = await store()
+          const docs = (await this.find({ filter, limit: 200 })).docs
+          for (const d of docs) await s.delete(docKey(coll, d._id)).catch(() => undefined)
+          return docs.length
+        },
+        async drop() {
+          const s = await store()
+          for (const d of await all<T>(coll)) await s.delete(docKey(coll, d._id)).catch(() => undefined)
+        },
+      }
     },
   }
 }

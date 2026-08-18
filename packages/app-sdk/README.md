@@ -71,6 +71,6 @@ Never expose `CHATU_APP_KEY` to the browser. MIT.
 
 ## Agent skills
 
-The package ships `skills/chatu-{kv,storage,ai}/SKILL.md` — task-focused manuals for coding agents
+The package ships `skills/chatu-{kv,db,storage,ai}/SKILL.md` — task-focused manuals for coding agents
 (standard rules, boilerplate, boundaries, common failure modes). The ChatU Builder sandbox copies them
 into the workspace `.claude/skills/` so Claude Code loads them on demand; they are versioned with the SDK.

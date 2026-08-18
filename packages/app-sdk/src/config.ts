@@ -127,11 +127,11 @@ export function deriveAiBaseUrl(dataBaseUrl: string): string {
 }
 
 /** 当前生效的驱动与环境（诊断用，不含密钥） */
-export function describe(): { driver: DriverKind; env?: 'dev' | 'prod'; baseUrl?: string; kv?: string; storage?: string } {
+export function describe(): { driver: DriverKind; env?: 'dev' | 'prod'; baseUrl?: string; kv?: string; storage?: string; db?: string } {
   const c = resolveConfig()
   if (c.kind === 'platform') return { driver: 'platform', env: c.env, baseUrl: c.baseUrl }
   if (c.kind === 'byo') return { driver: 'byo', kv: c.redisUrl ? 'redis' : 'memory', storage: c.s3 ? 's3' : 'memory' }
-  if (c.kind === 'edgeone') return { driver: 'edgeone', kv: `blob:${c.kvStore}`, storage: `blob:${c.storageStore}` }
+  if (c.kind === 'edgeone') return { driver: 'edgeone', kv: `blob:${c.kvStore}`, storage: `blob:${c.storageStore}`, db: `blob:${c.kvStore}/db` }
   return { driver: 'memory' }
 }
 
