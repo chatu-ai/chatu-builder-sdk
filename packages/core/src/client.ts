@@ -98,6 +98,7 @@ export interface DataUsage {
 }
 
 export type DeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: DeployResult }
+export type GitPushStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: GitPushResult }
 export interface DeployInput {
   provider: 'edgeone'
   projectName: string
@@ -166,6 +167,8 @@ export interface BuilderClient {
     saveSetting(conversationId: string, input: { target: string; credentialId?: string | null; config?: Record<string, unknown> }): Promise<DeploySettingView>
     /** 推送到用户 Git 仓库；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
     pushGit(conversationId: string, input: GitPushInput): Promise<GitPushResult>
+    /** 推送到 Git（SSE 进度版）：逐行 log 事件 + 最终 result；沙箱未运行时 result.error=SANDBOX_NOT_RUNNING */
+    pushGitStream(conversationId: string, input: GitPushInput, opts?: { signal?: AbortSignal }): AsyncIterable<GitPushStreamEvent>
     /** 一键部署（P1：EdgeOne Pages）；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
     deploy(conversationId: string, input: DeployInput): Promise<DeployResult>
     /** 一键部署（流式进度）：逐条产出 log 行，最后一条为 result */
@@ -298,8 +301,9 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       settings: id => req(`/${id}/deploy-settings`),
       saveSetting: (id, input) => req(`/${id}/deploy-settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      pushGitStream: (id, input, o) => readNamedSse<GitPushResult>(`${restBase}/${id}/export/git/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deploy: (id, input) => req(`/${id}/export/deploy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
-      deployStream: (id, input, o) => readNamedSse(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
+      deployStream: (id, input, o) => readNamedSse<DeployResult>(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
     data: {
       access: id => req(`/${id}/data-access`),
@@ -358,7 +362,7 @@ export class BuilderApiError extends Error {
 }
 
 /** 读取带 event: 名的 SSE（log / result） */
-async function* readNamedSse(url: string, init: RequestInit, doFetch: typeof fetch): AsyncIterable<DeployStreamEvent> {
+async function* readNamedSse<R>(url: string, init: RequestInit, doFetch: typeof fetch): AsyncIterable<{ type: 'log'; line: string } | { type: 'result'; result: R }> {
   const res = await doFetch(url, init)
   if (!res.ok || !res.body) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
   const reader = res.body.getReader()
@@ -381,13 +385,22 @@ async function* readNamedSse(url: string, init: RequestInit, doFetch: typeof fet
         let payload: any = data
         try { payload = JSON.parse(data) } catch { /* raw */ }
         if (eventName === 'log') yield { type: 'log', line: String(payload?.line ?? payload) }
-        else if (eventName === 'result') yield { type: 'result', result: payload as DeployResult }
+        else if (eventName === 'result') yield { type: 'result', result: normalizeKeys(payload) as R }
         eventName = ''
       }
     }
   } finally {
     reader.releaseLock()
   }
+}
+
+/** 服务端 SSE 序列化可能是 PascalCase（Ok/Url）——统一成 camelCase */
+function normalizeKeys(obj: any): any {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj
+  if ('ok' in obj || !('Ok' in obj)) return obj
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) out[k.charAt(0).toLowerCase() + k.slice(1)] = v
+  return out
 }
 
 function encPath(key: string): string {

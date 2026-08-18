@@ -115,6 +115,12 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       },
       deploy: async (_id, input) => ({ ok: true, projectName: input.projectName, env: input.env ?? 'production', url: `https://${input.projectName}.edgeone.app`, output: 'mock deploy ok', envVarsApplied: 3 }),
       pushGit: async (_id, input) => ({ ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') }),
+      pushGitStream: async function* (_id, input) {
+        yield { type: 'log', line: '▶ 检查工作区未提交改动 …' }
+        yield { type: 'log', line: `▶ 推送到 ${input.remoteUrl}（分支 ${input.branch ?? 'main'}）…` }
+        yield { type: 'log', line: 'Writing objects: 100% (12/12), done.' }
+        yield { type: 'result', result: { ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') } }
+      },
     },
     data: {
       kv: {
