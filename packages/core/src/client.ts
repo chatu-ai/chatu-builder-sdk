@@ -35,6 +35,8 @@ export interface SandboxStatus {
   previewUrl?: string
   /** dev server：running 且 !ready = 首屏编译中（1c 机型冷启动可能 1–2 分钟） */
   devServer?: { running: boolean; ready?: boolean; startingForMs?: number | null; lastError?: string | null } | null
+  /** runtime 内是否仍有生成在跑（上一轮连接中断后后台继续）：xid 可用于取消 */
+  agent?: { executing: boolean; xid?: string | null; sinceMs?: number | null } | null
 }
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
@@ -142,6 +144,8 @@ export interface BuilderClient {
     /** 生成预览分享链接（非所有者可看；沙箱需在运行）；默认 24h，最长 7 天 */
     share(conversationId: string, ttlHours?: number): Promise<{ url: string; token: string; expiresAt: string }>
     revokeShare(conversationId: string, token: string): Promise<{ ok: boolean }>
+    /** 重启 dev server（clean=true 先清 .next/.turbo 构建缓存）；服务端立即返回，就绪状态用 status().devServer.ready 轮询 */
+    restartDevServer(conversationId: string, opts?: { clean?: boolean }): Promise<{ ok: boolean; ready?: boolean; cleaned?: boolean }>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -269,6 +273,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       wake: id => req(`/sandbox/${id}/wake`, { method: 'POST' }),
       share: (id, ttlHours) => req(`/${id}/preview-share`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlHours }) }),
       revokeShare: (id, token) => req(`/${id}/preview-share/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }),
+      restartDevServer: (id, opts) => req(`/${id}/devserver/restart?clean=${opts?.clean ? 'true' : 'false'}`, { method: 'POST' }),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）

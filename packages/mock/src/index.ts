@@ -82,6 +82,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       wake: async () => { status = { ...status, state: 'ready' }; return status },
       share: async () => ({ url: 'https://sbx-mock.test/?s=mock', token: 'mock', expiresAt: new Date(Date.now() + 86400000).toISOString() }),
       revokeShare: async () => ({ ok: true }),
+      restartDevServer: async (_id, opts) => ({ ok: true, ready: false, cleaned: !!opts?.clean }),
     },
     versions: {
       list: async () => versions,
