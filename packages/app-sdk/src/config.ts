@@ -12,6 +12,10 @@ export interface PlatformConfig {
   apiKey: string
   env: 'dev' | 'prod'
   fetchImpl: typeof fetch
+  /** OpenAI 兼容的 LLM 中继地址（`{origin}/v1`）：CHATU_AI_URL 显式指定，否则由 CHATU_DATA_URL 去掉 `/data/v1` 推导 */
+  aiBaseUrl: string
+  /** 默认模型：CHATU_AI_MODEL → PRIMARY_MODEL（沙箱注入的平台默认模型）；都没有则不传，由服务端决定 */
+  aiModel?: string
 }
 export interface MemoryConfig { kind: 'memory' }
 /** 自带云资源（模式 A）：REDIS_URL → KV；S3_* → 对象存储（腾讯云 COS / MinIO / AWS 等 S3 兼容） */
@@ -29,6 +33,10 @@ export interface ConfigureOptions {
   env?: 'dev' | 'prod'
   driver?: DriverKind
   fetchImpl?: typeof fetch
+  /** LLM 中继地址（默认由 baseUrl 推导） */
+  aiBaseUrl?: string
+  /** LLM 默认模型 */
+  model?: string
 }
 
 let override: ConfigureOptions = {}
@@ -68,9 +76,25 @@ export function resolveConfig(): ResolvedConfig {
   if (driver === 'platform') {
     if (!baseUrl || !apiKey) throw new Error('@chatu-ai/app-sdk: platform driver requires CHATU_DATA_URL and CHATU_APP_KEY')
     const dataEnv = (override.env ?? env.CHATU_DATA_ENV ?? 'dev').toLowerCase() === 'prod' ? 'prod' : 'dev'
-    return { kind: 'platform', baseUrl: baseUrl.replace(/\/+$/, ''), apiKey, env: dataEnv, fetchImpl: override.fetchImpl ?? fetch }
+    const normalizedBase = baseUrl.replace(/\/+$/, '')
+    return {
+      kind: 'platform',
+      baseUrl: normalizedBase,
+      apiKey,
+      env: dataEnv,
+      fetchImpl: override.fetchImpl ?? fetch,
+      aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
+      aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+    }
   }
   return { kind: 'memory' }
+}
+
+/** `https://api.chatuapi.com/data/v1` → `https://api.chatuapi.com/v1`（Data API 与 LLM 中继同源） */
+export function deriveAiBaseUrl(dataBaseUrl: string): string {
+  const trimmed = dataBaseUrl.replace(/\/+$/, '')
+  if (/\/data\/v1$/.test(trimmed)) return trimmed.replace(/\/data\/v1$/, '/v1')
+  try { return `${new URL(trimmed).origin}/v1` } catch { return `${trimmed}/v1` }
 }
 
 /** 当前生效的驱动与环境（诊断用，不含密钥） */
