@@ -1,4 +1,4 @@
-import { resolveConfig, type PlatformConfig } from './config.js'
+import { resolveAiConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
 
 /**
@@ -143,10 +143,10 @@ let cached: { key: string; fetchImpl?: typeof fetch; client: AiClient } | null =
 
 /** 按当前配置取 AI 客户端（惰性、缓存；configure() 后自动重建） */
 export function getAi(): AiClient {
-  const cfg = resolveConfig()
-  const key = cfg.kind === 'platform' ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.apiKey.slice(-4)}` : cfg.kind
-  const fetchImpl = cfg.kind === 'platform' ? cfg.fetchImpl : undefined
-  if (!cached || cached.key !== key || cached.fetchImpl !== fetchImpl) cached = { key, fetchImpl, client: cfg.kind === 'platform' ? platformAi(cfg) : notConfigured() }
+  const cfg = resolveAiConfig()
+  const key = cfg ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.apiKey.slice(-4)}` : 'none'
+  const fetchImpl = cfg?.fetchImpl
+  if (!cached || cached.key !== key || cached.fetchImpl !== fetchImpl) cached = { key, fetchImpl, client: cfg ? platformAi(cfg) : notConfigured() }
   return cached.client
 }
 

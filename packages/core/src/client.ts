@@ -113,6 +113,8 @@ export interface DeployInput {
   env?: 'production' | 'preview'
   includeAppEnv?: boolean
   includeDataAccess?: boolean
+  /** 线上数据驱动：platform（默认，平台托管 Data API）| edgeone（EdgeOne Pages Blob，写 CHATU_DATA_DRIVER=edgeone） */
+  dataDriver?: 'platform' | 'edgeone'
 }
 export interface DeployResult {
   ok: boolean

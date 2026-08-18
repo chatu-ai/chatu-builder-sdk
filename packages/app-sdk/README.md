@@ -19,6 +19,7 @@ const src = await storage.url('avatars/u1.png', { expiresIn: 3600 })         // 
 | --- | --- | --- |
 | `CHATU_DATA_URL` + `CHATU_APP_KEY` (+ `CHATU_DATA_ENV=dev\|prod`) | **platform** — ChatU hosted Data API, metered | set automatically in the Builder preview; copy from the publish panel for your own server |
 | `REDIS_URL` and/or `S3_BUCKET` (+ `S3_ENDPOINT` `S3_REGION` `S3_ACCESS_KEY` `S3_SECRET_KEY` `S3_PREFIX`) | **byo** — your own Redis / S3-compatible bucket (Tencent COS, MinIO, AWS) | install optional deps: `npm i ioredis @aws-sdk/client-s3 @aws-sdk/s3-request-presigner` |
+| `CHATU_DATA_DRIVER=edgeone` (+ optional `CHATU_EDGEONE_KV_STORE` / `CHATU_EDGEONE_STORAGE_STORE`, external access: `EDGEONE_BLOB_PROJECT_ID` + `EDGEONE_BLOB_TOKEN`) | **edgeone** — Tencent EdgeOne Pages Blob for both `kv` (JSON envelope, TTL emulated) and `storage` (presigned PUT via `createUploadUrl`; `storage.url()` returns the in-app proxy path `/_chatu/blob/<key>` served by the template route) | `npm i @edgeone/pages-blob` (preinstalled in the Builder template); credential-free inside Pages Functions. `ai` keeps using `CHATU_DATA_URL` + `CHATU_APP_KEY` |
 | none | **memory** — in-process, lost on restart | local dev / fallback |
 
 ## AI (LLM relay)

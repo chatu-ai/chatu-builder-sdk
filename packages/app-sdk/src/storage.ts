@@ -1,4 +1,5 @@
 import { resolveConfig, type PlatformConfig } from './config.js'
+import { edgeoneStorage } from './edgeone.js'
 import { AppSdkError } from './errors.js'
 import { byoStorage } from './byo.js'
 
@@ -103,8 +104,8 @@ let cached: { key: string; client: StorageClient } | null = null
 
 export function getStorage(): StorageClient {
   const cfg = resolveConfig()
-  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : 'memory'
-  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformStorage(cfg) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : memoryStorage() }
+  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.storageStore}|${cfg.projectId ?? ''}` : 'memory'
+  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformStorage(cfg) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : cfg.kind === 'edgeone' ? edgeoneStorage(cfg) : memoryStorage() }
   return cached.client
 }
 
