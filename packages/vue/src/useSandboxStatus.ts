@@ -38,16 +38,27 @@ export function useSandboxStatus(
   const clearI = opts.clearInterval ?? globalThis.clearInterval.bind(globalThis)
   const pollMs = opts.pollMs ?? 3_000
   const idlePollMs = opts.idlePollMs ?? 60_000
-  const hibernatedPollMs = opts.hibernatedPollMs ?? 15_000
+  const hibernatedPollMs = opts.hibernatedPollMs ?? 30_000
 
   let lastPoll = 0
 
+  // 过渡态/编译中持续过久时逐级退避（避免异常卡住时每 3s 打一次接口）：<2min 按 pollMs，<5min 4×，之后 10×
+  let fastSince = 0
+  function backoff(base: number): number {
+    const now = Date.now()
+    if (!fastSince) fastSince = now
+    const elapsed = now - fastSince
+    if (elapsed > 5 * 60_000) return base * 10
+    if (elapsed > 2 * 60_000) return base * 4
+    return base
+  }
   function currentInterval(): number {
     const s = status.value?.state
-    if (!s || TRANSITIONAL.has(s)) return pollMs
-    if (s === 'hibernated') return hibernatedPollMs
+    if (!s || TRANSITIONAL.has(s)) return backoff(pollMs)
+    if (s === 'hibernated') { fastSince = 0; return hibernatedPollMs }
     // dev server 仍在编译：按过渡态频率轮询，就绪后自动放慢
-    if (status.value?.devServer && status.value.devServer.running && status.value.devServer.ready === false) return pollMs
+    if (status.value?.devServer && status.value.devServer.running && status.value.devServer.ready === false) return backoff(pollMs)
+    fastSince = 0
     return idlePollMs
   }
 
