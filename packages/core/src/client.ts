@@ -97,9 +97,12 @@ export interface DataUsage {
   error?: string
 }
 
+export type DeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: DeployResult }
 export interface DeployInput {
   provider: 'edgeone'
   projectName: string
+  /** EdgeOne 部署区域：global（默认，含中国大陆可用）| overseas */
+  area?: 'global' | 'overseas'
   credentialId?: string
   token?: string
   save?: boolean
@@ -115,6 +118,7 @@ export interface DeployResult {
   projectName?: string
   env?: string
   url?: string
+  consoleUrl?: string
   output?: string
   envVarsApplied?: number
   envVarsFailed?: string[]
@@ -164,6 +168,8 @@ export interface BuilderClient {
     pushGit(conversationId: string, input: GitPushInput): Promise<GitPushResult>
     /** 一键部署（P1：EdgeOne Pages）；沙箱未运行时 ok=false, error='SANDBOX_NOT_RUNNING' */
     deploy(conversationId: string, input: DeployInput): Promise<DeployResult>
+    /** 一键部署（流式进度）：逐条产出 log 行，最后一条为 result */
+    deployStream(conversationId: string, input: DeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<DeployStreamEvent>
   }
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
   data: {
@@ -293,6 +299,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       saveSetting: (id, input) => req(`/${id}/deploy-settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       deploy: (id, input) => req(`/${id}/export/deploy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      deployStream: (id, input, o) => readNamedSse(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
     data: {
       access: id => req(`/${id}/data-access`),
@@ -347,6 +354,39 @@ function unwrapEnvelope<T>(json: unknown): T {
 export class BuilderApiError extends Error {
   constructor(readonly status: number, body: string) {
     super(`builder api ${status}: ${body.slice(0, 200)}`)
+  }
+}
+
+/** 读取带 event: 名的 SSE（log / result） */
+async function* readNamedSse(url: string, init: RequestInit, doFetch: typeof fetch): AsyncIterable<DeployStreamEvent> {
+  const res = await doFetch(url, init)
+  if (!res.ok || !res.body) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventName = ''
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let nl: number
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).replace(/\r$/, '')
+        buffer = buffer.slice(nl + 1)
+        if (line.startsWith('event:')) { eventName = line.slice(6).trim(); continue }
+        if (!line.startsWith('data:')) { if (line === '') eventName = eventName; continue }
+        const data = line.slice(5).trim()
+        if (!data) continue
+        let payload: any = data
+        try { payload = JSON.parse(data) } catch { /* raw */ }
+        if (eventName === 'log') yield { type: 'log', line: String(payload?.line ?? payload) }
+        else if (eventName === 'result') yield { type: 'result', result: payload as DeployResult }
+        eventName = ''
+      }
+    }
+  } finally {
+    reader.releaseLock()
   }
 }
 
