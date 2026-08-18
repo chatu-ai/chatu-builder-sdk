@@ -134,6 +134,9 @@ export interface BuilderClient {
     previewToken(conversationId: string): Promise<{ token: string; previewUrl: string }>
     /** 唤醒/确保沙箱（休眠 → 恢复快照 → 起 dev server；不发起 agent 会话） */
     wake(conversationId: string): Promise<SandboxStatus>
+    /** 生成预览分享链接（非所有者可看；沙箱需在运行）；默认 24h，最长 7 天 */
+    share(conversationId: string, ttlHours?: number): Promise<{ url: string; token: string; expiresAt: string }>
+    revokeShare(conversationId: string, token: string): Promise<{ ok: boolean }>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -255,6 +258,8 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       }),
       previewToken: id => req(`/${id}/preview-token`),
       wake: id => req(`/sandbox/${id}/wake`, { method: 'POST' }),
+      share: (id, ttlHours) => req(`/${id}/preview-share`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlHours }) }),
+      revokeShare: (id, token) => req(`/${id}/preview-share/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）
