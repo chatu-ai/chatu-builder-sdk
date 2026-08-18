@@ -68,3 +68,9 @@ export async function POST(req: Request) {
 `ai.chat('hello')` accepts a plain string as a single user message; `ai.models()` lists available model ids. Without platform env vars (memory / byo drivers) every call rejects with `AppSdkError('AI_NOT_CONFIGURED')` — there is no local fallback for LLM calls.
 
 Never expose `CHATU_APP_KEY` to the browser. MIT.
+
+## Agent skills
+
+The package ships `skills/chatu-{kv,storage,ai}/SKILL.md` — task-focused manuals for coding agents
+(standard rules, boilerplate, boundaries, common failure modes). The ChatU Builder sandbox copies them
+into the workspace `.claude/skills/` so Claude Code loads them on demand; they are versioned with the SDK.
