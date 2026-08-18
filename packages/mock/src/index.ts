@@ -111,6 +111,11 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
     deploy: {
       settings: async () => [{ target: 'git', credentialId: 'cred-1', config: { remoteUrl: 'https://github.com/demo/app.git', branch: 'main' }, updatedTime: new Date().toISOString() }],
       saveSetting: async (_id, input) => ({ target: input.target, credentialId: input.credentialId ?? null, config: input.config ?? {}, updatedTime: new Date().toISOString() }),
+      deployFunctionStream: async function* (_id, input) {
+        yield { type: 'log', line: '▶ 构建 Next.js standalone 产物 …' }
+        yield { type: 'log', line: `▶ 部署 ${input.name}（${input.region}）…` }
+        yield { type: 'result', result: { ok: true, provider: input.provider, name: input.name, region: input.region, url: `https://${input.name}.mock.fcapp.run`, output: 'mock' } }
+      },
       deployStream: async function* (_id, input) {
         yield { type: 'log', line: '▶ 关联 EdgeOne 项目 …' }
         yield { type: 'log', line: '▶ 构建并部署 …' }

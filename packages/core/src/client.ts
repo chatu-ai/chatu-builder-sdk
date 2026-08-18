@@ -99,6 +99,41 @@ export interface DataUsage {
   error?: string
 }
 
+export type FunctionProvider = 'aliyun-fc' | 'tencent-scf' | 'volc-vefaas'
+/** 函数计算部署（技术方案 17）：凭据二选一 credentialId（凭据库 aliyun/tencent/volcengine）或 accessKeyId+accessKeySecret */
+export interface FunctionDeployInput {
+  provider: FunctionProvider
+  /** 函数/应用名：字母开头，字母数字与短横线，2-63 位 */
+  name: string
+  /** 地域，如 cn-hangzhou / ap-guangzhou / cn-beijing */
+  region: string
+  credentialId?: string
+  accessKeyId?: string
+  accessKeySecret?: string
+  save?: boolean
+  label?: string
+  /** volc-vefaas 新建应用时的 API 网关名 */
+  gatewayName?: string
+  memoryMb?: number
+  includeAppEnv?: boolean
+  includeDataAccess?: boolean
+}
+export interface FunctionDeployResult {
+  ok: boolean
+  error?: string
+  message?: string
+  state?: string
+  provider?: string
+  name?: string
+  region?: string
+  url?: string
+  consoleUrl?: string
+  output?: string
+  envVarsApplied?: number
+  envVarsFailed?: string[]
+  credentialId?: string | null
+}
+export type FunctionDeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: FunctionDeployResult }
 export type DeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: DeployResult }
 export type GitPushStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: GitPushResult }
 export interface DeployInput {
@@ -183,6 +218,8 @@ export interface BuilderClient {
     deploy(conversationId: string, input: DeployInput): Promise<DeployResult>
     /** 一键部署（流式进度）：逐条产出 log 行，最后一条为 result */
     deployStream(conversationId: string, input: DeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<DeployStreamEvent>
+    /** 部署到函数计算（阿里云 FC / 腾讯 SCF / 火山 veFaaS）：SSE 进度 + 结果 */
+    deployFunctionStream(conversationId: string, input: FunctionDeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<FunctionDeployStreamEvent>
   }
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
   data: {
@@ -316,6 +353,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       pushGit: (id, input) => req(`/${id}/export/git`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
       pushGitStream: (id, input, o) => readNamedSse<GitPushResult>(`${restBase}/${id}/export/git/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deploy: (id, input) => req(`/${id}/export/deploy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      deployFunctionStream: (id, input, o) => readNamedSse<FunctionDeployResult>(`${restBase}/${id}/export/deploy-function/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deployStream: (id, input, o) => readNamedSse<DeployResult>(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
     data: {
