@@ -140,7 +140,8 @@ export interface BuilderClient {
     restore(conversationId: string, sha: string): Promise<void>
   }
   files: {
-    tree(conversationId: string, opts?: { path?: string; ref?: string }): Promise<FileNode[]>
+    /** 文件树：默认只返回 path 的直接子项（depth=0），按需逐层展开；depth 最多 3 */
+    tree(conversationId: string, opts?: { path?: string; ref?: string; depth?: number }): Promise<FileNode[]>
     read(conversationId: string, path: string, opts?: { ref?: string }): Promise<string>
     downloadUrl(conversationId: string): string
   }
@@ -264,7 +265,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
     files: {
       // 服务端形状：{ tree: FileNode[] }
       tree: async (id, opts) => {
-        const r = await req<{ tree?: FileNode[] } | FileNode[]>(`/${id}/files?${qs(opts)}`)
+        const r = await req<{ tree?: FileNode[] } | FileNode[]>(`/${id}/files?${qs({ path: opts?.path, ref: opts?.ref, depth: opts?.depth })}`)
         return Array.isArray(r) ? r : (r.tree ?? [])
       },
       read: (id, path, opts) => req<string>(`/${id}/files/read?${qs({ path, ...opts })}`),
