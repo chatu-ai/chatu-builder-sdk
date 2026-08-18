@@ -83,6 +83,8 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       share: async () => ({ url: 'https://sbx-mock.test/?s=mock', token: 'mock', expiresAt: new Date(Date.now() + 86400000).toISOString() }),
       revokeShare: async () => ({ ok: true }),
       restartDevServer: async (_id, opts) => ({ ok: true, ready: false, cleaned: !!opts?.clean }),
+      hibernate: async () => { status = { ...status, state: 'hibernated' }; return { ok: true, state: 'hibernated' } },
+      terminate: async () => { status = { ...status, state: 'recycled' }; return { ok: true, state: 'recycled' } },
     },
     versions: {
       list: async () => versions,

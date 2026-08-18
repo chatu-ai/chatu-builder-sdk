@@ -146,6 +146,10 @@ export interface BuilderClient {
     revokeShare(conversationId: string, token: string): Promise<{ ok: boolean }>
     /** 重启 dev server（clean=true 先清 .next/.turbo 构建缓存）；服务端立即返回，就绪状态用 status().devServer.ready 轮询 */
     restartDevServer(conversationId: string, opts?: { clean?: boolean }): Promise<{ ok: boolean; ready?: boolean; cleaned?: boolean }>
+    /** 休眠：保存快照后关闭 Pod（下次进入/发消息自动唤醒） */
+    hibernate(conversationId: string): Promise<{ ok: boolean; state?: string; skipped?: boolean }>
+    /** 强制关闭 Pod：不做新快照，立即删除（沙箱卡死时用；保留已有快照） */
+    terminate(conversationId: string): Promise<{ ok: boolean; state?: string }>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -274,6 +278,8 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       share: (id, ttlHours) => req(`/${id}/preview-share`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlHours }) }),
       revokeShare: (id, token) => req(`/${id}/preview-share/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }),
       restartDevServer: (id, opts) => req(`/${id}/devserver/restart?clean=${opts?.clean ? 'true' : 'false'}`, { method: 'POST' }),
+      hibernate: id => req(`/sandbox/${id}/hibernate`, { method: 'POST' }),
+      terminate: id => req(`/sandbox/${id}/terminate`, { method: 'POST' }),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）

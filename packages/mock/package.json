@@ -1,6 +1,6 @@
 {
   "name": "@chatu-ai/builder-sdk-mock",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Mock BuilderClient for @chatu-ai/builder-sdk: scripted event replay with latency & disconnect injection",
   "license": "MIT",
   "type": "module",
