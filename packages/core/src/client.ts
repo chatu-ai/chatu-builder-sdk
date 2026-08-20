@@ -110,6 +110,10 @@ export interface SandboxMeta {
     createdAt?: string | null
     lastActivity?: string | null
     lastAgentActivity?: string | null
+    /** 空闲多久自动休眠（秒，按机型） */
+    idleTtlSeconds?: number
+    /** 预计自动休眠时间（最近活跃 + TTL）；生成中不会被回收，仅为预计值 */
+    hibernateAt?: string | null
     hasSnapshot?: boolean
     snapshotKey?: string | null
   }

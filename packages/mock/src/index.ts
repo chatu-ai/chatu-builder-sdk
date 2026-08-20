@@ -87,7 +87,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       terminate: async () => { status = { ...status, state: 'recycled' }; return { ok: true, state: 'recycled' } },
       meta: async id => ({
         ok: true,
-        sandbox: { sandboxId: `chat-use-${id}`, state: status.state, podName: 'pod-mock-1', machineType: 'default', createdAt: new Date().toISOString(), hasSnapshot: true },
+        sandbox: { sandboxId: `chat-use-${id}`, state: status.state, podName: 'pod-mock-1', machineType: 'default', createdAt: new Date().toISOString(), idleTtlSeconds: 600, hibernateAt: new Date(Date.now() + 600000).toISOString(), hasSnapshot: true },
         configuredImage: 'ccr.example/chatuse-base:mock',
         runtime: { ok: true, version: '20260820.1.0', node: 'v24.0.0', appSdkVersion: '0.8.1', skills: ['chatu-db', 'chatu-kv', 'chatu-storage', 'chatu-ai'], clis: { edgeone: '1.6.28', scf: '1.3.2' }, uptimeMs: 123456 },
       }),
