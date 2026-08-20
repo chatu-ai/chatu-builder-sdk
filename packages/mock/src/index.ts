@@ -163,7 +163,10 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       access: async () => ({ baseUrl: 'https://api.mock/data/v1', apiKey: 'sk-conv-mock', envs: ['dev', 'prod'], envVars: { CHATU_DATA_URL: 'https://api.mock/data/v1', CHATU_APP_KEY: 'sk-conv-mock', CHATU_DATA_ENV: 'prod' } }),
     },
     logs: {
-      tail: async () => ({ lines: ['▲ Next.js 16 dev', '- Local: http://localhost:3001', '✓ Ready in 1.2s'] }),
+      tail: async (_id, _lines, opts) =>
+        opts?.since
+          ? { lines: [], nextSeq: opts.since, truncated: false, source: 'live' }
+          : { lines: ['▲ Next.js 16 dev', '- Local: http://localhost:3001', '✓ Ready in 1.2s'], nextSeq: 3, truncated: true, source: 'live' },
     },
     export: {
       zip: async () => ({ blob: new Blob(['PK'], { type: 'application/zip' }), fileName: 'mock-app.zip' }),

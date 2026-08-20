@@ -316,8 +316,11 @@ export interface BuilderClient {
     export(conversationId: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; env: string; kv: Array<{ key: string; value: unknown; ttl?: number | null }>; storage: Array<{ key: string; size: number; url?: string | null }> }>
   }
   logs: {
-    /** dev server 最近日志（沙箱未运行返回空） */
-    tail(conversationId: string, lines?: number): Promise<{ lines: string[] }>
+    /**
+     * dev server 日志（沙箱未运行时读落盘快照）。
+     * 传 `since`（上次返回的 nextSeq）只取新增行；`truncated=true` 表示需整体替换（首次/缓冲区已滚动/来自快照）。
+     */
+    tail(conversationId: string, lines?: number, opts?: { since?: number | null }): Promise<{ lines: string[]; nextSeq?: number | null; truncated?: boolean; source?: string }>
   }
   export: {
     /**
@@ -454,9 +457,12 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       export: (id, env) => req(`/${id}/data/export?env=${env ?? 'prod'}`),
     },
     logs: {
-      tail: async (id, lines) => {
-        const r = await req<{ lines?: string[] } | string[]>(`/${id}/logs?tail=${lines ?? 200}`)
-        return { lines: Array.isArray(r) ? r : (r.lines ?? []) }
+      tail: async (id, lines, opts) => {
+        const since = opts?.since
+        const q = `tail=${lines ?? 200}${since === undefined || since === null ? '' : `&since=${since}`}`
+        const r = await req<{ lines?: string[]; nextSeq?: number | null; truncated?: boolean; source?: string } | string[]>(`/${id}/logs?${q}`)
+        if (Array.isArray(r)) return { lines: r, truncated: true }
+        return { lines: r.lines ?? [], nextSeq: r.nextSeq ?? null, truncated: r.truncated ?? since === undefined, source: r.source }
       },
     },
     export: {
