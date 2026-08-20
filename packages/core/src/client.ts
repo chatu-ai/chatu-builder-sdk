@@ -137,7 +137,7 @@ export interface SandboxMeta {
   } | null
 }
 
-/** 沙箱启动进度：step 0 调度 1 网络 2 拉镜像 3 启动容器 4 健康检查 5 就绪 */
+/** 沙箱启动进度：step 0 调度 1 网络 2 拉镜像 3 启动容器 4 配置环境 5 恢复数据 6 启动应用 7 就绪 */
 export interface SandboxStartup {
   ok: boolean
   state?: string
@@ -145,6 +145,9 @@ export interface SandboxStartup {
   phase?: string | null
   ready?: boolean
   containerState?: string | null
+  /** 编排阶段（Pod Running 之后）：assigning | restoring | starting-devserver | ready | failed */
+  orchestrationPhase?: string | null
+  phaseMessage?: string | null
   startedAt?: string | null
   elapsedMs?: number
   step?: number

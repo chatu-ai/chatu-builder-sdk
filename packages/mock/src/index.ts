@@ -85,7 +85,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       restartDevServer: async (_id, opts) => ({ ok: true, ready: false, cleaned: !!opts?.clean }),
       hibernate: async () => { status = { ...status, state: 'hibernated' }; return { ok: true, state: 'hibernated' } },
       terminate: async () => { status = { ...status, state: 'recycled' }; return { ok: true, state: 'recycled' } },
-      startup: async () => ({ ok: true, state: 'creating', exists: true, phase: 'Pending', ready: false, step: 2, percent: 42, etaSeconds: 90, detail: '拉取镜像（首次较慢）', elapsedMs: 60000, events: [{ type: 'Normal', reason: 'Pulling', message: 'Pulling image', time: new Date().toISOString(), count: 1 }] }),
+      startup: async () => ({ ok: true, state: 'creating', exists: true, phase: 'Pending', ready: false, step: 2, percent: 42, etaSeconds: 90, detail: '拉取镜像（首次较慢）', orchestrationPhase: 'creating-pod', elapsedMs: 60000, events: [{ type: 'Normal', reason: 'Pulling', message: 'Pulling image', time: new Date().toISOString(), count: 1 }] }),
       meta: async id => ({
         ok: true,
         sandbox: { sandboxId: `chat-use-${id}`, state: status.state, podName: 'pod-mock-1', machineType: 'default', createdAt: new Date().toISOString(), idleTtlSeconds: 600, hibernateAt: new Date(Date.now() + 600000).toISOString(), hasSnapshot: true },
