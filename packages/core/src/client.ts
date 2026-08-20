@@ -99,6 +99,40 @@ export interface DataUsage {
   error?: string
 }
 
+/** 沙箱诊断信息（技术方案 08）：用于判断 Pod 是否已使用最新镜像、是否加载了预期能力 */
+export interface SandboxMeta {
+  ok: boolean
+  sandbox?: {
+    sandboxId?: string
+    state?: string
+    podName?: string | null
+    machineType?: string | null
+    createdAt?: string | null
+    lastActivity?: string | null
+    lastAgentActivity?: string | null
+    hasSnapshot?: boolean
+    snapshotKey?: string | null
+  }
+  /** 平台当前配置的 Builder 镜像（与 runtime.version 对照可判断 Pod 是否为最新） */
+  configuredImage?: string | null
+  runtime?: {
+    ok?: boolean
+    error?: string
+    message?: string
+    version?: string | null
+    image?: string | null
+    node?: string
+    startedAt?: string
+    uptimeMs?: number
+    workspaceDir?: string
+    appSdkVersion?: string | null
+    skills?: string[]
+    clis?: Record<string, string | null>
+    devServer?: Record<string, unknown>
+    agent?: { executing?: boolean; xid?: string | null; sinceMs?: number | null }
+  } | null
+}
+
 export type FunctionProvider = 'aliyun-fc' | 'tencent-scf' | 'volc-vefaas'
 /** 函数计算部署（技术方案 17）：凭据二选一 credentialId（凭据库 aliyun/tencent/volcengine）或 accessKeyId+accessKeySecret */
 export interface FunctionDeployInput {
@@ -187,6 +221,8 @@ export interface BuilderClient {
     hibernate(conversationId: string): Promise<{ ok: boolean; state?: string; skipped?: boolean }>
     /** 强制关闭 Pod：不做新快照，立即删除（沙箱卡死时用；保留已有快照） */
     terminate(conversationId: string): Promise<{ ok: boolean; state?: string }>
+    /** 沙箱诊断信息：编排侧（状态/Pod/机型/时间/快照）+ runtime（版本/Node/Skills/CLI）+ 平台配置镜像 */
+    meta(conversationId: string): Promise<SandboxMeta>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -327,6 +363,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       restartDevServer: (id, opts) => req(`/${id}/devserver/restart?clean=${opts?.clean ? 'true' : 'false'}`, { method: 'POST' }),
       hibernate: id => req(`/sandbox/${id}/hibernate`, { method: 'POST' }),
       terminate: id => req(`/sandbox/${id}/terminate`, { method: 'POST' }),
+      meta: id => req(`/sandbox/${id}/meta`),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）
