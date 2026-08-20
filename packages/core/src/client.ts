@@ -37,6 +37,11 @@ export interface SandboxStatus {
   devServer?: { running: boolean; ready?: boolean; startingForMs?: number | null; lastError?: string | null } | null
   /** runtime 内是否仍有生成在跑（上一轮连接中断后后台继续）：xid 可用于取消 */
   agent?: { executing: boolean; xid?: string | null; sinceMs?: number | null } | null
+  /** 关闭过程中（休眠/强制关闭，Pod 尚未真正释放）：此时不应唤醒，前端显示"关闭中" */
+  closing?: boolean
+  /** 编排阶段：creating-pod|assigning|restoring|starting-devserver|ready|hibernating|releasing|terminating|hibernated|recycled|failed */
+  phase?: string | null
+  phaseMessage?: string | null
 }
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
