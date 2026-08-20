@@ -137,6 +137,23 @@ export interface SandboxMeta {
   } | null
 }
 
+/** 沙箱启动进度：step 0 调度 1 网络 2 拉镜像 3 启动容器 4 健康检查 5 就绪 */
+export interface SandboxStartup {
+  ok: boolean
+  state?: string
+  exists?: boolean
+  phase?: string | null
+  ready?: boolean
+  containerState?: string | null
+  startedAt?: string | null
+  elapsedMs?: number
+  step?: number
+  percent?: number
+  etaSeconds?: number
+  detail?: string | null
+  events?: Array<{ type: string; reason: string; message: string; time?: string | null; count?: number }>
+}
+
 export type FunctionProvider = 'aliyun-fc' | 'tencent-scf' | 'volc-vefaas'
 /** 函数计算部署（技术方案 17）：凭据二选一 credentialId（凭据库 aliyun/tencent/volcengine）或 accessKeyId+accessKeySecret */
 export interface FunctionDeployInput {
@@ -227,6 +244,8 @@ export interface BuilderClient {
     terminate(conversationId: string): Promise<{ ok: boolean; state?: string }>
     /** 沙箱诊断信息：编排侧（状态/Pod/机型/时间/快照）+ runtime（版本/Node/Skills/CLI）+ 平台配置镜像 */
     meta(conversationId: string): Promise<SandboxMeta>
+    /** 启动进度（Pod 事件推导）：沙箱创建/恢复期间轮询展示 */
+    startup(conversationId: string): Promise<SandboxStartup>
   }
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
@@ -368,6 +387,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       hibernate: id => req(`/sandbox/${id}/hibernate`, { method: 'POST' }),
       terminate: id => req(`/sandbox/${id}/terminate`, { method: 'POST' }),
       meta: id => req(`/sandbox/${id}/meta`),
+      startup: id => req(`/sandbox/${id}/startup`),
     },
     versions: {
       // 服务端形状：{ versions: VersionInfo[] }（runtime 透传）
