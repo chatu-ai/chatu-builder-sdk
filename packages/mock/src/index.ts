@@ -144,6 +144,19 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
         set: async () => ({ ok: true }),
         remove: async () => ({ ok: true, removed: true }),
       },
+      auth: {
+        users: async () => ({
+          ok: true,
+          users: [
+            { id: 'u1', email: 'alice@example.com', name: '爱丽丝', avatar: null, createdAt: Date.now() - 86400000, lastLoginAt: Date.now(), disabled: false, meta: {} },
+            { id: 'u2', email: 'bob@example.com', name: 'Bob', avatar: null, createdAt: Date.now() - 172800000, lastLoginAt: Date.now() - 3600000, disabled: true, meta: {} },
+          ],
+          total: 2,
+          nextSkip: null,
+        }),
+        updateUser: async (_id, userId, patch) => ({ ok: true, user: { id: userId, email: 'alice@example.com', ...patch } }),
+        removeUser: async () => ({ ok: true, removed: true }),
+      },
       db: {
         collections: async () => ({ ok: true, collections: [{ name: 'todos', count: 2 }] }),
         query: async () => ({ ok: true, docs: [{ _id: 'a1', _createdAt: Date.now(), _updatedAt: Date.now(), title: 'mock todo', done: false }], total: 1, nextSkip: null }),

@@ -308,6 +308,12 @@ export interface BuilderClient {
       remove(conversationId: string, collection: string, id: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; removed?: boolean }>
       drop(conversationId: string, collection: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; dropped?: boolean }>
     }
+    /** 资源面板：应用用户（技术方案 21） */
+    auth: {
+      users(conversationId: string, opts?: { env?: 'dev' | 'prod'; skip?: number; limit?: number; keyword?: string }): Promise<{ ok: boolean; users: Array<Record<string, unknown>>; total: number; nextSkip: number | null }>
+      updateUser(conversationId: string, id: string, patch: { name?: string | null; avatar?: string | null; disabled?: boolean; meta?: Record<string, unknown> }, env?: 'dev' | 'prod'): Promise<{ ok: boolean; user?: Record<string, unknown> }>
+      removeUser(conversationId: string, id: string, env?: 'dev' | 'prod'): Promise<{ ok: boolean; removed?: boolean }>
+    }
     /** 资源面板：对象存储浏览 */
     storage: {
       list(conversationId: string, opts?: { env?: 'dev' | 'prod'; prefix?: string; cursor?: string | null; limit?: number }): Promise<{ ok: boolean; items: Array<{ key: string; size: number; lastModified?: string | null }>; nextCursor: string | null }>
@@ -451,6 +457,11 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         replace: (id, coll, docId, doc, env) => req(`/${id}/data/db/${encPath(coll)}/${encPath(docId)}?${qs({ env })}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(doc) }),
         remove: (id, coll, docId, env) => req(`/${id}/data/db/${encPath(coll)}/${encPath(docId)}?${qs({ env })}`, { method: 'DELETE' }),
         drop: (id, coll, env) => req(`/${id}/data/db/${encPath(coll)}?${qs({ env })}`, { method: 'DELETE' }),
+      },
+      auth: {
+        users: (id, o) => req(`/${id}/data/auth/users?${qs({ env: o?.env, skip: o?.skip, limit: o?.limit, keyword: o?.keyword })}`),
+        updateUser: (id, userId, patch, env) => req(`/${id}/data/auth/users/${encPath(userId)}?${qs({ env })}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) }),
+        removeUser: (id, userId, env) => req(`/${id}/data/auth/users/${encPath(userId)}?${qs({ env })}`, { method: 'DELETE' }),
       },
       storage: {
         list: (id, o) => req(`/${id}/data/storage?${qs({ env: o?.env, prefix: o?.prefix, cursor: o?.cursor ?? undefined, limit: o?.limit })}`),

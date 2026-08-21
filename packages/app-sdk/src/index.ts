@@ -7,6 +7,8 @@ export { db, getDb, matchesFilter, applySort, queryDocs, newDocId } from './db.j
 export type { DbClient, Collection, Doc, Filter, FilterOp, Sort, FindOptions, FindResult, UpdateInput } from './db.js'
 export { storage, getStorage } from './storage.js'
 export type { StorageClient, StorageObject, StorageListResult, UploadUrlResult } from './storage.js'
+export { auth, getAuth } from './auth.js'
+export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch } from './auth.js'
 export { ai, getAi } from './ai.js'
 export type { AiClient, AiMessage, AiChatOptions, AiChatResult, AiUsage } from './ai.js'
 export { encodeKvKey, decodeKvKey } from './edgeone.js'

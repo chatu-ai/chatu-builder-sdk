@@ -54,10 +54,17 @@ export interface ConfigureOptions {
 }
 
 let override: ConfigureOptions = {}
+let version = 0
 
 /** 显式配置（测试或非 env 场景）；不调用则完全由环境变量决定 */
 export function configure(options: ConfigureOptions): void {
   override = { ...options }
+  version += 1
+}
+
+/** configure() 调用次数：带内存状态的模块（如 auth 的 memory 驱动）用它判断是否该重建客户端 */
+export function configVersion(): number {
+  return version
 }
 
 export function resolveConfig(): ResolvedConfig {
