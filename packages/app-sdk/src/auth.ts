@@ -42,6 +42,13 @@ export interface AuthClient {
 // ---------- platform driver ----------
 function platformAuth(cfg: PlatformConfig): AuthClient {
   const headers = { 'x-api-key': cfg.apiKey, 'x-chatu-env': cfg.env, 'content-type': 'application/json' }
+  /**
+   * 会话缓存：getSession() 会被每个请求调用，而每次调用都计费（auth_ops）。
+   * 缓存命中期内不再回源；停用/删除用户或退出登录时清掉，最长滞后 cfg.authSessionCacheSeconds。
+   */
+  const sessionCache = new Map<string, { user: AppUser | null; expiresAt: number }>()
+  const cacheTtl = cfg.authSessionCacheSeconds * 1000
+  const dropCache = () => sessionCache.clear()
   async function call<T>(method: string, path: string, body?: unknown, token?: string | null): Promise<T> {
     const res = await cfg.fetchImpl(`${cfg.baseUrl}/auth${path}`, {
       method,
@@ -74,11 +81,22 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
     },
     async getSession(token) {
       if (!token) return null
+      if (cacheTtl > 0) {
+        const hit = sessionCache.get(token)
+        if (hit && hit.expiresAt > Date.now()) return hit.user
+      }
       const r = await call<{ user: AppUser | null }>('GET', '/session', undefined, token)
-      return r.user ?? null
+      const user = r.user ?? null
+      if (cacheTtl > 0) {
+        // 只缓存有限条目，避免伪造 token 打满内存
+        if (sessionCache.size > 1000) dropCache()
+        sessionCache.set(token, { user, expiresAt: Date.now() + cacheTtl })
+      }
+      return user
     },
     async signOut(token) {
       if (!token) return false
+      sessionCache.delete(token)
       const r = await call<{ removed: boolean }>('POST', '/logout', {}, token)
       return r.removed
     },
@@ -100,10 +118,12 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
       },
       async update(id, patch) {
         const r = await call<{ user: AppUser }>('PATCH', `/users/${encodeURIComponent(id)}`, patch)
+        dropCache()   // 可能刚刚停用了某个用户，缓存里的旧结果必须作废
         return r.user
       },
       async delete(id) {
         const r = await call<{ removed: boolean }>('DELETE', `/users/${encodeURIComponent(id)}`)
+        dropCache()
         return r.removed
       },
     },
@@ -229,8 +249,10 @@ let cached: { key: string; client: AuthClient } | null = null
 /** 按当前配置取 auth 客户端（惰性、缓存；configure() 后自动重建） */
 export function getAuth(): AuthClient {
   const cfg = resolveConfig()
-  // memory 驱动带进程内状态：把 configure() 次数并入缓存键，重新配置即换一套干净的用户表
-  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : `${cfg.kind}|${configVersion()}`
+  // 两种驱动都带进程内状态（platform 的会话缓存 / memory 的用户表）：并入 configure() 次数，重新配置即重建
+  const key = cfg.kind === 'platform'
+    ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}|${cfg.authSessionCacheSeconds}|${configVersion()}`
+    : `${cfg.kind}|${configVersion()}`
   if (!cached || cached.key !== key) {
     cached = {
       key,

@@ -16,6 +16,12 @@ export interface PlatformConfig {
   aiBaseUrl: string
   /** 默认模型：CHATU_AI_MODEL → PRIMARY_MODEL（沙箱注入的平台默认模型）；都没有则不传，由服务端决定 */
   aiModel?: string
+  /**
+   * auth.getSession() 的进程内缓存秒数（默认 30，0 关闭）。
+   * 会话校验每个请求都会发生，缓存能显著减少计费的 auth 调用；代价是"停用用户"最多延迟这么久生效。
+   * 覆盖：configure({ authSessionCacheSeconds }) 或环境变量 CHATU_AUTH_SESSION_CACHE。
+   */
+  authSessionCacheSeconds: number
 }
 export interface MemoryConfig { kind: 'memory' }
 /** 自带云资源（模式 A）：REDIS_URL → KV；S3_* → 对象存储（腾讯云 COS / MinIO / AWS 等 S3 兼容） */
@@ -51,6 +57,8 @@ export interface ConfigureOptions {
   aiBaseUrl?: string
   /** LLM 默认模型 */
   model?: string
+  /** auth.getSession() 进程内缓存秒数（默认 30，0 关闭） */
+  authSessionCacheSeconds?: number
 }
 
 let override: ConfigureOptions = {}
@@ -121,9 +129,18 @@ export function resolveConfig(): ResolvedConfig {
       fetchImpl: override.fetchImpl ?? fetch,
       aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
       aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+      authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
     }
   }
   return { kind: 'memory' }
+}
+
+/** 会话缓存秒数：非法值回落到默认 30，上限 300（避免停用用户长时间仍可用） */
+function normalizeCacheSeconds(value: number | string | undefined): number {
+  if (value === undefined || value === '') return 30
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n) || n < 0) return 30
+  return Math.min(Math.floor(n), 300)
 }
 
 /** `https://api.chatuapi.com/data/v1` → `https://api.chatuapi.com/v1`（Data API 与 LLM 中继同源） */
@@ -162,6 +179,7 @@ export function resolveAiConfig(): PlatformConfig | null {
     fetchImpl: override.fetchImpl ?? fetch,
     aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
     aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+    authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
   }
 }
 

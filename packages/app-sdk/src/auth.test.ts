@@ -100,6 +100,43 @@ d('auth platform driver', () => {
     await expect(auth.login('a@b.com', 'secret1')).rejects.toMatchObject({ code: 'CODE_RATE_LIMITED', status: 429 })
   })
 
+  it('caches getSession to avoid paying for one auth call per request', async () => {
+    let sessionCalls = 0
+    const user = { id: 'u1', email: 'a@b.com', name: 'A', avatar: null, createdAt: 1, lastLoginAt: 2, disabled: false, meta: {} }
+    const fetchImpl = (async (url: string) => {
+      if (url.includes('/auth/session')) sessionCalls += 1
+      if (url.includes('/auth/users/')) return new Response(JSON.stringify({ ok: true, user }), { status: 200 })
+      return new Response(JSON.stringify({ ok: true, user, removed: true }), { status: 200 })
+    }) as unknown as typeof fetch
+
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', env: 'prod', fetchImpl })
+    await auth.getSession('t1')
+    await auth.getSession('t1')
+    await auth.getSession('t1')
+    expect(sessionCalls).toBe(1)
+    await auth.getSession('t2')
+    expect(sessionCalls).toBe(2)
+
+    // 停用某个用户后缓存必须作废，否则被停用的人还能继续访问
+    await auth.users.update('u1', { disabled: true })
+    await auth.getSession('t1')
+    expect(sessionCalls).toBe(3)
+
+    // 退出登录只清掉自己那条
+    await auth.signOut('t1')
+    await auth.getSession('t1')
+    expect(sessionCalls).toBe(4)
+    await auth.getSession('t2')
+    expect(sessionCalls).toBe(5)
+
+    // 显式关闭缓存：每次都回源
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', env: 'prod', fetchImpl, authSessionCacheSeconds: 0 })
+    sessionCalls = 0
+    await auth.getSession('t1')
+    await auth.getSession('t1')
+    expect(sessionCalls).toBe(2)
+  })
+
   it('refuses drivers without a platform data service', async () => {
     configure({ driver: 'edgeone' })
     await expect(auth.getSession('t')).rejects.toThrow(/不支持应用用户体系/)

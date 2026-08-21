@@ -5,7 +5,7 @@ description: 应用自己的登录用户体系（@chatu-ai/app-sdk 的 auth）�
 
 # 应用用户体系（auth）
 
-给**生成出来的这个应用**一套自己的终端用户：注册、登录、会话、退出、用户管理。与 ChatU 平台账号完全无关，数据按"应用 + 环境（预览/线上）"隔离——预览环境注册的测试账号不会出现在线上。
+给**生成出来的这个应用**一套自己的终端用户：注册、登录、会话、退出、用户管理。**用量计入应用所有者的 ChatU 点数**（每次调用记 `auth_ops`，实际外发的验证码邮件另按封计价，见下方「计费与省钱写法」）。与 ChatU 平台账号完全无关，数据按"应用 + 环境（预览/线上）"隔离——预览环境注册的测试账号不会出现在线上。
 
 ## 什么时候需要它
 
@@ -144,13 +144,37 @@ export async function toggleTodo(id: string, done: boolean) {
 
 管理员：用 `meta.role === 'admin'` 判断（在平台「用户」面板或后台页给某个用户打上），不要硬编码邮箱白名单以外的复杂权限模型。
 
+## 计费与省钱写法
+
+| 计量项 | 何时累加 | 默认折算 |
+| --- | --- | --- |
+| `auth_ops` | 每次 auth 接口调用（发码、校验、登录、`currentUser()`、用户管理…） | 100 次 = 1 点 |
+| `auth_emails` | **真正发出**的验证码邮件（预览环境未配邮件返回 devCode 时不计） | 1 封 = 1 点 |
+
+`currentUser()` / `requireUser()` 每次请求都会打一次会话校验，是最容易放量的一项。SDK 已内置 **30 秒进程内会话缓存**（`CHATU_AUTH_SESSION_CACHE` 秒数可调，0 关闭），但代码写法仍决定实际调用量：
+
+```ts
+// ✅ 一个页面/一次 Server Action 只取一次，往下传
+export default async function Page() {
+  const me = await requireUser();
+  return <><Header user={me} /><TodoList user={me} /></>;   // 不要在每个子组件里再 currentUser()
+}
+
+// ❌ 循环里逐条校验
+for (const item of items) { const me = await currentUser(); /* … */ }
+
+// ✅ 公开页面不要强行登录：能匿名浏览的内容别加 requireUser()
+```
+
+发码按钮务必加 60 秒倒计时（服务端也有 60s 频控），既省邮件钱也避免 `CODE_RATE_LIMITED`。批量导入用户时用 `auth.users.list({ limit: 200 })` 一次多取，别逐个 `users.get()`。
+
 ## 边界与禁忌
 
 - **禁止**引入 next-auth / auth.js / clerk / supabase-auth / firebase-auth / passport / bcrypt / jose / jsonwebtoken —— 平台已提供，装了也跑不通（沙箱与函数部署都没有对应后端）。
 - 不要自己生成 JWT、不要把用户信息写进普通 Cookie / localStorage，会话只用 `chatu_session`（HttpOnly）。
 - 不要在客户端组件里 import `@/lib/platform` 的 auth；通过 Server Action 或 Route Handler 拿 `currentUser()` 的结果传下去。
 - 需要登录的页面要么 `await requireUser()`，要么在 Server Action 里再校验一次——只在前端隐藏按钮不算保护。
-- 单应用单环境上限 1 万用户、每日验证码 200 封；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
+- 单应用单环境上限 1 万用户、每日验证码 200 封（超出报 `CODE_QUOTA_EXCEEDED`）；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
 - 只有邮箱登录；没有短信、没有微信/GitHub 第三方登录。用户要"手机号登录"时，如实说明当前只支持邮箱。
 
 ## 常见错误
@@ -162,4 +186,6 @@ export async function toggleTodo(id: string, done: boolean) {
 | `EMAIL_NOT_CONFIGURED`（线上） | 平台未配置邮件通道 | 线上改用邮箱密码登录，或让用户联系平台开通 |
 | `CODE_RATE_LIMITED` | 同一邮箱 60 秒内重复发码 | 前端按钮加倒计时 |
 | `AUTH_UNSUPPORTED` | 应用被部署在没有平台数据服务的驱动上（如 edgeone blob） | 部署时选择带平台数据服务的目标 |
+| `READ_ONLY` / 无法注册新用户 | 应用所有者点数不足，数据已置只读 | 已登录用户仍可访问；充值后自动恢复 |
+| 停用了用户但他还能访问 | 会话缓存最长 30 秒 | 等待缓存过期，或把 `CHATU_AUTH_SESSION_CACHE` 设为 0 |
 | 别人能看到我的数据 | 查询没带 `userId`，或改删时没做归属校验 | 每个 find/update/delete 都带上 `userId` 判断 |

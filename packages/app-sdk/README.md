@@ -45,6 +45,8 @@ In the Next.js template, `@/lib/platform` wraps this in HttpOnly-cookie helpers:
 
 Limits: 10k users per app/env, 200 codes per day, code valid 10 min / 5 tries, 60s per-email resend window.
 
+Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by default) and each **actually sent** verification email as `auth_emails` (1 email = 1 point). Since `getSession()` runs on every request, the platform driver keeps a 30-second in-process session cache — tune it with `CHATU_AUTH_SESSION_CACHE` (seconds, `0` disables) or `configure({ authSessionCacheSeconds })`. The cache is dropped on `signOut()` and on any `users.update()` / `users.delete()`, so disabling a user takes effect within that window.
+
 ## AI (LLM relay)
 
 `ai` calls the platform's OpenAI-compatible endpoint (`{origin}/v1/chat/completions`) with the same app key used by the Data API. **Server-side only** — call it from a Route Handler / Server Action and let the browser `fetch` your own API; never ship the key to the client. Usage is metered and **billed to the app owner's ChatU points**.
