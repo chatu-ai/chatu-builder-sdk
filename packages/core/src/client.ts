@@ -34,7 +34,14 @@ export interface SandboxStatus {
   state: SandboxState
   previewUrl?: string
   /** dev server：running 且 !ready = 首屏编译中（1c 机型冷启动可能 1–2 分钟） */
-  devServer?: { running: boolean; ready?: boolean; startingForMs?: number | null; lastError?: string | null } | null
+  devServer?: {
+    running: boolean
+    ready?: boolean
+    startingForMs?: number | null
+    lastError?: string | null
+    /** 最近一次异常退出；gaveUp=true 表示 runtime 已停止自动重启，需要修代码后手动重启 */
+    crash?: { at?: string | null; exitCode?: number | null; restart?: number; gaveUp?: boolean; errors?: string[] } | null
+  } | null
   /** runtime 内是否仍有生成在跑（上一轮连接中断后后台继续）：xid 可用于取消 */
   agent?: { executing: boolean; xid?: string | null; sinceMs?: number | null } | null
   /** 关闭过程中（休眠/强制关闭，Pod 尚未真正释放）：此时不应唤醒，前端显示"关闭中" */
