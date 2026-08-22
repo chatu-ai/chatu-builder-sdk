@@ -208,6 +208,17 @@ export interface FunctionDeployResult {
 export type FunctionDeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: FunctionDeployResult }
 export type DeployStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: DeployResult }
 export type GitPushStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: GitPushResult }
+/** 沙箱终端：一次一条命令的执行结果 */
+export interface ExecResult {
+  ok: boolean
+  code?: number | null
+  signal?: string | null
+  truncated?: boolean
+  durationMs?: number
+  error?: string | null
+  message?: string | null
+}
+export type ExecStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: ExecResult }
 export interface DeployInput {
   provider: 'edgeone'
   projectName: string
@@ -298,6 +309,8 @@ export interface BuilderClient {
     /** 部署到函数计算（阿里云 FC / 腾讯 SCF / 火山 veFaaS）：SSE 进度 + 结果 */
     deployFunctionStream(conversationId: string, input: FunctionDeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<FunctionDeployStreamEvent>
   }
+  /** 沙箱终端（001/09 P2-A）：执行一条命令并流式回输出；AI 生成中会被拒绝（409） */
+  exec(conversationId: string, command: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): AsyncIterable<ExecStreamEvent>
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
   data: {
     access(conversationId: string): Promise<{ baseUrl?: string | null; apiKey: string; envs: string[]; envVars: Record<string, string | null> }>
@@ -452,6 +465,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       deployFunctionStream: (id, input, o) => readNamedSse<FunctionDeployResult>(`${restBase}/${id}/export/deploy-function/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deployStream: (id, input, o) => readNamedSse<DeployResult>(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
+    exec: (id, command, o) => readNamedSse<ExecResult>(`${restBase}/${id}/exec/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify({ command, timeoutMs: o?.timeoutMs }), signal: o?.signal }), doFetch),
     data: {
       access: id => req(`/${id}/data-access`),
       usage: id => req(`/${id}/data-usage`),
