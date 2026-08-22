@@ -139,6 +139,19 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
         yield { type: 'result', result: { ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') } }
       },
     },
+    runs: {
+      start: async () => ({ ok: true, runId: 'run-mock-1', state: 'pending' }),
+      status: async () => ({ ok: true, runId: 'run-mock-1', state: 'running', xid: 'xid-mock-1' }),
+      send: async () => ({ ok: true, statusCode: 200 }),
+      cancel: async () => ({ ok: true, cancelled: true }),
+      events: () => ({
+        [Symbol.asyncIterator]: async function* () {
+          yield { id: '1-0', event: null, data: { type: 'run.phase', phase: 'sandbox' } };
+          yield { id: '2-0', event: null, data: { type: 'created-response', xid: 'xid-mock-1' } };
+          yield { id: '3-0', event: 'done', data: { type: 'run.finished' } };
+        },
+      }),
+    },
     runMessage: async (_id, _xid, seq) => ({ ok: true, message: { sequenceNumber: seq, content: 'mock full tool result' } }),
     exec: async function* (_id, command) {
       yield { type: 'log', line: `$ ${command}` };

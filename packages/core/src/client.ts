@@ -219,6 +219,23 @@ export interface ExecResult {
   message?: string | null
 }
 export type ExecStreamEvent = { type: 'log'; line: string } | { type: 'result'; result: ExecResult }
+
+/** 一次生成（run，技术方案 22 Phase 2）：创建即返回，事件另行订阅 */
+export interface RunMeta {
+  ok: boolean
+  runId: string
+  /** pending（准备沙箱中）| running | finished | failed */
+  state: string
+  xid?: string | null
+  error?: string | null
+  createdAt?: string
+}
+/** run 事件帧：id 用于断线续传（Last-Event-ID 语义），data 为原始载荷（与 v1 完全一致） */
+export interface RunEventFrame {
+  id: string
+  event: string | null
+  data: unknown
+}
 export interface DeployInput {
   provider: 'edgeone'
   projectName: string
@@ -312,6 +329,22 @@ export interface BuilderClient {
     deployStream(conversationId: string, input: DeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<DeployStreamEvent>
     /** 部署到函数计算（阿里云 FC / 腾讯 SCF / 火山 veFaaS）：SSE 进度 + 结果 */
     deployFunctionStream(conversationId: string, input: FunctionDeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<FunctionDeployStreamEvent>
+  }
+  /**
+   * v2 生成接口（技术方案 22 Phase 2）：创建 run 立即返回，不等沙箱冷启动；
+   * 事件用 `runs.events()` 订阅，断线自动从上次 id 续传。v1 的 create/connect/send 仍可用。
+   */
+  runs: {
+    /** 受理一次生成，立即返回 runId（沙箱准备过程会作为 run.phase 事件下发） */
+    start(input: { conversationId: string; prompt?: string; message?: string } & Record<string, unknown>): Promise<RunMeta>
+    /** run 状态（轮询兜底/调试） */
+    status(runId: string): Promise<RunMeta>
+    /** 订阅事件；断线自动带上最后一帧的 id 重连（默认重试 5 次，退避 1s→8s） */
+    events(runId: string, opts?: { after?: string | null; signal?: AbortSignal; maxRetries?: number; retryBaseMs?: number }): AsyncIterable<RunEventFrame>
+    /** 向进行中的 run 追加消息 */
+    send(runId: string, input: Record<string, unknown>): Promise<{ ok: boolean; statusCode?: number }>
+    /** 取消 run */
+    cancel(runId: string): Promise<{ ok: boolean; cancelled?: boolean }>
   }
   /**
    * 生成事件里的单条消息全文（技术方案 22 S2）：平台把超大的工具结果改为"预览 + 引用"下发，
@@ -476,6 +509,15 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       deployFunctionStream: (id, input, o) => readNamedSse<FunctionDeployResult>(`${restBase}/${id}/export/deploy-function/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deployStream: (id, input, o) => readNamedSse<DeployResult>(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
+    runs: {
+      start: input => req(`/runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      status: runId => req(`/runs/${encPath(runId)}`),
+      send: (runId, input) => req(`/runs/${encPath(runId)}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input) }),
+      cancel: runId => req(`/runs/${encPath(runId)}/cancel`, { method: 'POST' }),
+      events: (runId, opts) => ({
+        [Symbol.asyncIterator]: () => readRunEvents(`${restBase}/runs/${encPath(runId)}/events`, auth, doFetch, opts),
+      }),
+    },
     runMessage: (id, xid, seq) => req(`/${id}/runs/${encPath(xid)}/messages/${seq}`),
     exec: (id, command, o) => readNamedSse<ExecResult>(`${restBase}/${id}/exec/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify({ command, timeoutMs: o?.timeoutMs }), signal: o?.signal }), doFetch),
     data: {
@@ -550,6 +592,79 @@ export class BuilderApiError extends Error {
 }
 
 /** 读取带 event: 名的 SSE（log / result） */
+/**
+ * 订阅 run 事件：逐帧产出 { id, event, data }，断线后带 `after={最后一帧 id}` 自动重连。
+ * 这是 v2 相对 v1 的关键差别——v1 断线要靠调用方自己记 checkpoint 再发一次 connect。
+ */
+async function* readRunEvents(
+  url: string,
+  auth: AuthProvider,
+  doFetch: typeof fetch,
+  opts?: { after?: string | null; signal?: AbortSignal; maxRetries?: number; retryBaseMs?: number },
+): AsyncGenerator<RunEventFrame> {
+  let cursor = opts?.after ?? null
+  const maxRetries = opts?.maxRetries ?? 5
+  const retryBaseMs = opts?.retryBaseMs ?? 1000
+  // 连续"没拿到任何新帧"的重连次数：有进展就清零，这样长任务可以无限续订，
+  // 而"连上就断且没数据"的坏情况不会变成死循环
+  let attempt = 0
+
+  for (;;) {
+    const target = cursor ? `${url}?after=${encodeURIComponent(cursor)}` : url
+    let res: Response
+    try {
+      res = await doFetch(target, auth.apply({ headers: { accept: 'text/event-stream' }, signal: opts?.signal }))
+    } catch (err) {
+      if (opts?.signal?.aborted || attempt >= maxRetries) throw err
+      await new Promise(r => setTimeout(r, Math.min(8000, retryBaseMs * 2 ** attempt++)))
+      continue
+    }
+    if (!res.ok || !res.body) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let id: string | null = null
+    let eventName: string | null = null
+    let ended = false
+    let delivered = 0
+    try {
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let nl: number
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl).replace(/\r$/, '')
+          buffer = buffer.slice(nl + 1)
+          if (line.startsWith(':')) continue                       // 心跳
+          if (line.startsWith('id:')) { id = line.slice(3).trim(); continue }
+          if (line.startsWith('event:')) { eventName = line.slice(6).trim(); continue }
+          if (!line.startsWith('data:')) continue
+          const raw = line.slice(5).trim()
+          if (!raw) continue
+          let data: unknown = raw
+          try { data = JSON.parse(raw) } catch { /* 原样 */ }
+          if (id) cursor = id
+          delivered++
+          yield { id: id ?? '', event: eventName, data }
+          if (eventName === 'done') ended = true
+          id = null
+          eventName = null
+        }
+        if (ended) break
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    if (ended || opts?.signal?.aborted) return
+    // 服务端把连接断了但 run 还没结束（部署/重启/网关超时）：带着 cursor 续订
+    attempt = delivered > 0 ? 0 : attempt + 1
+    if (attempt > maxRetries) return
+    await new Promise(r => setTimeout(r, Math.min(8000, retryBaseMs * 2 ** Math.max(0, attempt - 1))))
+  }
+}
+
 async function* readNamedSse<R>(url: string, init: RequestInit, doFetch: typeof fetch): AsyncIterable<{ type: 'log'; line: string } | { type: 'result'; result: R }> {
   const res = await doFetch(url, init)
   if (!res.ok || !res.body) throw new BuilderApiError(res.status, await res.text().catch(() => ''))
