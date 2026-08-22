@@ -79,6 +79,8 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
       status: async () => status,
       heartbeat: async () => {},
       previewToken: async () => ({ token: 'mock-token', previewUrl: `${status.previewUrl ?? ''}/?t=mock-token` }),
+      snapshots: async () => ({ ok: true, snapshots: [{ key: 'sbx-1/1700000000000.tar.gz', bytes: 1024 * 512, createdAt: Date.now() - 3600_000 }] }),
+      restoreSnapshot: async (_id, key) => ({ ok: true, key }),
       wake: async () => { status = { ...status, state: 'ready' }; return status },
       share: async () => ({ url: 'https://sbx-mock.test/?s=mock', token: 'mock', expiresAt: new Date(Date.now() + 86400000).toISOString() }),
       revokeShare: async () => ({ ok: true }),

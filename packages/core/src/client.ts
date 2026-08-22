@@ -258,6 +258,10 @@ export interface BuilderClient {
     status(conversationId: string): Promise<SandboxStatus>
     heartbeat(conversationId: string, opts: { visible: boolean }): Promise<void | { ok?: boolean; state?: SandboxState | string }>
     /** 一次性预览 token（06 §6.1）：返回可直接作 iframe src 的带 ?t= 的 URL */
+    /** 快照清单（新→旧）：沙箱信息面板展示"有几个快照、多大、什么时候" */
+    snapshots(conversationId: string): Promise<{ ok: boolean; error?: string; snapshots: Array<{ key: string; bytes: number; createdAt: number }> }>
+    /** 恢复到指定快照（覆盖工作区文件并重启 dev server）；AI 生成中返回 ok:false, error:'BUSY' */
+    restoreSnapshot(conversationId: string, key: string): Promise<{ ok: boolean; error?: string; message?: string; key?: string }>
     /** port：应用自己起的第二个服务（多端口预览）；不传即 dev server */
     previewToken(conversationId: string, opts?: { port?: number | null }): Promise<{ token: string; previewUrl: string }>
     /** 唤醒/确保沙箱（休眠 → 恢复快照 → 起 dev server；不发起 agent 会话） */
@@ -420,6 +424,8 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         body: JSON.stringify(opts),
       }),
       previewToken: (id, opts) => req(`/${id}/preview-token?${qs({ port: opts?.port ?? undefined })}`),
+      snapshots: id => req(`/sandbox/${id}/snapshots`),
+      restoreSnapshot: (id, key) => req(`/sandbox/${id}/snapshots/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ key }) }),
       wake: id => req(`/sandbox/${id}/wake`, { method: 'POST' }),
       share: (id, ttlHours) => req(`/${id}/preview-share`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlHours }) }),
       revokeShare: (id, token) => req(`/${id}/preview-share/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }),
