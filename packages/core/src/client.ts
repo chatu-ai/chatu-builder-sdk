@@ -313,6 +313,11 @@ export interface BuilderClient {
     /** 部署到函数计算（阿里云 FC / 腾讯 SCF / 火山 veFaaS）：SSE 进度 + 结果 */
     deployFunctionStream(conversationId: string, input: FunctionDeployInput, opts?: { signal?: AbortSignal }): AsyncIterable<FunctionDeployStreamEvent>
   }
+  /**
+   * 生成事件里的单条消息全文（技术方案 22 S2）：平台把超大的工具结果改为"预览 + 引用"下发，
+   * 前端展开时用 `chatuRef`（`{xid}/{seq}`）回取完整内容。
+   */
+  runMessage(conversationId: string, xid: string, seq: number): Promise<{ ok: boolean; error?: string; message?: Record<string, unknown> }>
   /** 沙箱终端（001/09 P2-A）：执行一条命令并流式回输出；AI 生成中会被拒绝（409） */
   exec(conversationId: string, command: string, opts?: { timeoutMs?: number; signal?: AbortSignal }): AsyncIterable<ExecStreamEvent>
   /** 平台数据能力接入信息（技术方案 15）：线上部署所需环境变量；apiKey 为服务端密钥 */
@@ -471,6 +476,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
       deployFunctionStream: (id, input, o) => readNamedSse<FunctionDeployResult>(`${restBase}/${id}/export/deploy-function/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
       deployStream: (id, input, o) => readNamedSse<DeployResult>(`${restBase}/${id}/export/deploy/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify(input), signal: o?.signal }), doFetch),
     },
+    runMessage: (id, xid, seq) => req(`/${id}/runs/${encPath(xid)}/messages/${seq}`),
     exec: (id, command, o) => readNamedSse<ExecResult>(`${restBase}/${id}/exec/stream`, auth.apply({ method: 'POST', headers: { 'content-type': 'application/json', accept: 'text/event-stream' }, body: JSON.stringify({ command, timeoutMs: o?.timeoutMs }), signal: o?.signal }), doFetch),
     data: {
       access: id => req(`/${id}/data-access`),

@@ -139,6 +139,7 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
         yield { type: 'result', result: { ok: true, remoteUrl: input.remoteUrl, branch: input.branch ?? 'main', sha: 'deadbeefcafe', output: 'mock push ok', webUrl: input.remoteUrl.replace(/\.git$/, '') } }
       },
     },
+    runMessage: async (_id, _xid, seq) => ({ ok: true, message: { sequenceNumber: seq, content: 'mock full tool result' } }),
     exec: async function* (_id, command) {
       yield { type: 'log', line: `$ ${command}` };
       yield { type: 'log', line: 'mock output' };
