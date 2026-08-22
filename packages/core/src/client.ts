@@ -39,6 +39,8 @@ export interface SandboxStatus {
     ready?: boolean
     startingForMs?: number | null
     lastError?: string | null
+    /** 沙箱内处于 LISTEN 的端口，首个为 dev server；用于多端口预览切换 */
+    ports?: number[] | null
     /** 最近一次异常退出；gaveUp=true 表示 runtime 已停止自动重启，需要修代码后手动重启 */
     crash?: { at?: string | null; exitCode?: number | null; restart?: number; gaveUp?: boolean; errors?: string[] } | null
   } | null
@@ -245,7 +247,8 @@ export interface BuilderClient {
     status(conversationId: string): Promise<SandboxStatus>
     heartbeat(conversationId: string, opts: { visible: boolean }): Promise<void | { ok?: boolean; state?: SandboxState | string }>
     /** 一次性预览 token（06 §6.1）：返回可直接作 iframe src 的带 ?t= 的 URL */
-    previewToken(conversationId: string): Promise<{ token: string; previewUrl: string }>
+    /** port：应用自己起的第二个服务（多端口预览）；不传即 dev server */
+    previewToken(conversationId: string, opts?: { port?: number | null }): Promise<{ token: string; previewUrl: string }>
     /** 唤醒/确保沙箱（休眠 → 恢复快照 → 起 dev server；不发起 agent 会话） */
     wake(conversationId: string): Promise<SandboxStatus>
     /** 生成预览分享链接（非所有者可看；沙箱需在运行）；默认 24h，最长 7 天 */
@@ -403,7 +406,7 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(opts),
       }),
-      previewToken: id => req(`/${id}/preview-token`),
+      previewToken: (id, opts) => req(`/${id}/preview-token?${qs({ port: opts?.port ?? undefined })}`),
       wake: id => req(`/sandbox/${id}/wake`, { method: 'POST' }),
       share: (id, ttlHours) => req(`/${id}/preview-share`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ttlHours }) }),
       revokeShare: (id, token) => req(`/${id}/preview-share/revoke`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token }) }),

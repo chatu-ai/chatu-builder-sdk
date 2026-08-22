@@ -7,7 +7,13 @@ import type { BuilderClient } from '@chatu-ai/builder-sdk'
  * - 授权失效（预览域授权页 postMessage）时调用 refresh() 重取
  * token 一次性：每次 refresh 都签发新 token，旧 iframe 已兑换为 cookie 不受影响
  */
-export function usePreviewUrl(client: BuilderClient, conversationId: string, rawPreviewUrl: Ref<string | undefined>) {
+export function usePreviewUrl(
+  client: BuilderClient,
+  conversationId: string,
+  rawPreviewUrl: Ref<string | undefined>,
+  /** 预览端口（应用自己起的第二个服务）；变化时自动重取 token 与地址 */
+  port?: Ref<number | null | undefined>,
+) {
   const src = ref<string | undefined>(undefined)
   const error = ref<string | null>(null)
   let seq = 0
@@ -19,7 +25,7 @@ export function usePreviewUrl(client: BuilderClient, conversationId: string, raw
     }
     const my = ++seq
     try {
-      const { previewUrl } = await client.sandbox.previewToken(conversationId)
+      const { previewUrl } = await client.sandbox.previewToken(conversationId, { port: port?.value ?? null })
       if (my === seq) {
         src.value = previewUrl || rawPreviewUrl.value
         error.value = previewUrl ? null : 'preview-token 响应缺少 previewUrl'
@@ -33,7 +39,7 @@ export function usePreviewUrl(client: BuilderClient, conversationId: string, raw
     }
   }
 
-  watch(rawPreviewUrl, () => void refresh(), { immediate: true })
+  watch([rawPreviewUrl, () => port?.value], () => void refresh(), { immediate: true })
 
   return { src, error, refresh }
 }
