@@ -22,6 +22,17 @@ const src = await storage.url('avatars/u1.png', { expiresIn: 3600 })         // 
 | `CHATU_DATA_DRIVER=edgeone` (+ optional `CHATU_EDGEONE_KV_STORE` / `CHATU_EDGEONE_STORAGE_STORE`, external access: `EDGEONE_BLOB_PROJECT_ID` + `EDGEONE_BLOB_TOKEN`) | **edgeone** — Tencent EdgeOne Pages Blob for both `kv` (JSON envelope, TTL emulated) and `storage` (presigned PUT via `createUploadUrl`; `storage.url()` returns the in-app proxy path `/_chatu/blob/<key>` served by the template route) | `npm i @edgeone/pages-blob` (preinstalled in the Builder template); credential-free inside Pages Functions. `ai` keeps using `CHATU_DATA_URL` + `CHATU_APP_KEY` |
 | none | **memory** — in-process, lost on restart | local dev / fallback |
 
+### Structured output
+
+```ts
+const data = await ai.json('extract {title, amount} from: ' + text, {
+  schema: z.toJSONSchema(Schema),   // optional, sent to the model
+  validate: v => Schema.parse(v),   // optional; a failure is retried with the error message
+})
+```
+
+`ai.json` forces JSON-only output, strips code fences, parses, validates, and retries once by default.
+
 ## Auth (app users)
 
 `auth` gives the generated app **its own end users** (separate from ChatU platform accounts), scoped per app + environment (`dev`/`prod`). Email code or email + password; sessions are opaque tokens (stored server-side as SHA-256, sliding 30-day expiry). Requires the **platform** driver.
@@ -43,7 +54,7 @@ await auth.users.update(id, { disabled: true })                // also revokes t
 
 In the Next.js template, `@/lib/platform` wraps this in HttpOnly-cookie helpers: `currentUser()`, `requireUser()`, `signInWithCode()`, `endSession()`.
 
-Limits: 10k users per app/env, 200 codes per day, code valid 10 min / 5 tries, 60s per-email resend window.
+Limits: 10k users per app/env, 200 codes and 500 signups per day, code valid 10 min / 5 tries, 60s per-email resend window, password login locks an email for 15 min after 10 consecutive failures.
 
 Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by default) and each **actually sent** verification email as `auth_emails` (1 email = 1 point). Since `getSession()` runs on every request, the platform driver keeps a 30-second in-process session cache — tune it with `CHATU_AUTH_SESSION_CACHE` (seconds, `0` disables) or `configure({ authSessionCacheSeconds })`. The cache is dropped on `signOut()` and on any `users.update()` / `users.delete()`, so disabling a user takes effect within that window.
 
@@ -96,6 +107,6 @@ Never expose `CHATU_APP_KEY` to the browser. MIT.
 
 ## Agent skills
 
-The package ships `skills/chatu-{kv,db,storage,ai,auth}/SKILL.md` — task-focused manuals for coding agents
+The package ships `skills/chatu-{kv,db,storage,ai,auth,validation}/SKILL.md` — task-focused manuals for coding agents
 (standard rules, boilerplate, boundaries, common failure modes). The ChatU Builder sandbox copies them
 into the workspace `.claude/skills/` so Claude Code loads them on demand; they are versioned with the SDK.

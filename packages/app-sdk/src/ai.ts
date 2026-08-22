@@ -21,9 +21,26 @@ export interface AiChatOptions {
 export interface AiUsage { promptTokens?: number; completionTokens?: number; totalTokens?: number }
 export interface AiChatResult { content: string; model?: string; usage?: AiUsage }
 
+/** ai.json 的选项：schema 用于约束模型输出，validate 用于把结果收成业务类型（可直接传 zod 的 parse） */
+export interface AiJsonOptions<T = unknown> extends AiChatOptions {
+  /** JSON Schema（会随提示词发给模型，并尽量用 response_format 约束） */
+  schema?: Record<string, unknown>
+  /** 期望结构的示例，比 schema 更直观，两者可同时给 */
+  example?: unknown
+  /** 校验/转换；抛错即视为不合格，会带着错误信息重试（zod: v => Schema.parse(v)） */
+  validate?: (value: unknown) => T
+  /** 结构不合格时的重试次数，默认 1 */
+  retries?: number
+}
+
 export interface AiClient {
   /** 一次性对话，返回完整回复 */
   chat(messages: AiMessage[] | string, opts?: AiChatOptions): Promise<AiChatResult>
+  /**
+   * 结构化输出：让模型只回 JSON 并解析成对象；给了 validate 则校验不过会带着错误重试。
+   * 用它替代"让模型回一段文本再自己正则抠字段"。
+   */
+  json<T = unknown>(messages: AiMessage[] | string, opts?: AiJsonOptions<T>): Promise<T>
   /** 流式对话，逐段产出文本增量 */
   stream(messages: AiMessage[] | string, opts?: AiChatOptions): AsyncIterable<string>
   /** 可用模型 id 列表 */
@@ -88,6 +105,62 @@ export async function* parseSseDeltas(body: ReadableStream<Uint8Array>): AsyncGe
   }
 }
 
+/** 去掉 ```json 代码围栏、取出第一个完整的 JSON 值；模型经常"顺手"包一层 */
+export function extractJson(text: string): unknown {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```$/, '').trim()
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    // 前后可能还有说明文字：截取第一个 { 或 [ 到最后一个 } 或 ]
+    const start = trimmed.search(/[[{]/)
+    const end = Math.max(trimmed.lastIndexOf('}'), trimmed.lastIndexOf(']'))
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1))
+    }
+    throw new AppSdkError('AI_INVALID_JSON', `模型返回的不是 JSON：${trimmed.slice(0, 200)}`)
+  }
+}
+
+/** ai.json 的公共逻辑：约束提示 + response_format + 解析 + 校验 + 带错误重试 */
+async function jsonWithRetry<T>(
+  chat: (messages: AiMessage[] | string, opts?: AiChatOptions) => Promise<AiChatResult>,
+  messages: AiMessage[] | string,
+  opts?: AiJsonOptions<T>,
+): Promise<T> {
+  const base = toMessages(messages)
+  const instructions = [
+    '只输出 JSON 本身，不要 Markdown 代码块、不要解释文字。',
+    opts?.schema ? `必须满足这个 JSON Schema：\n${JSON.stringify(opts.schema)}` : '',
+    opts?.example !== undefined ? `结构示例：\n${JSON.stringify(opts.example)}` : '',
+  ].filter(Boolean).join('\n')
+
+  const retries = Math.max(0, opts?.retries ?? 1)
+  let lastError: unknown
+  let repair = ''
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const msgs: AiMessage[] = [
+      { role: 'system', content: instructions },
+      ...base,
+      ...(repair ? [{ role: 'user' as const, content: `上次输出不合格：${repair}\n请只返回修正后的 JSON。` }] : []),
+    ]
+    const result = await chat(msgs, {
+      ...opts,
+      // json_object 是 OpenAI 兼容端点的通用写法；不支持的模型会忽略，此时靠提示词与解析兜底
+      extra: { response_format: { type: 'json_object' }, ...(opts?.extra ?? {}) },
+    })
+    try {
+      const parsed = extractJson(result.content)
+      return opts?.validate ? opts.validate(parsed) : (parsed as T)
+    } catch (err) {
+      lastError = err
+      repair = err instanceof Error ? err.message : String(err)
+    }
+  }
+  throw lastError instanceof AppSdkError
+    ? lastError
+    : new AppSdkError('AI_INVALID_JSON', `模型输出结构不符合要求（已重试 ${String(retries)} 次）：${String(lastError)}`)
+}
+
 // ---------- platform driver ----------
 function platformAi(cfg: PlatformConfig): AiClient {
   const headers = { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json' }
@@ -106,6 +179,13 @@ function platformAi(cfg: PlatformConfig): AiClient {
         model: typeof json?.model === 'string' ? json.model : undefined,
         usage: u ? { promptTokens: u.prompt_tokens, completionTokens: u.completion_tokens, totalTokens: u.total_tokens } : undefined,
       }
+    },
+    async json(messages, opts) {
+      return jsonWithRetry(
+        (msgs, o) => this.chat(msgs, o),
+        messages,
+        opts,
+      )
     },
     stream(messages, opts) {
       const start = async (): Promise<ReadableStream<Uint8Array>> => {
@@ -134,6 +214,7 @@ function notConfigured(): AiClient {
   const fail = () => { throw new AppSdkError('AI_NOT_CONFIGURED', NOT_CONFIGURED) }
   return {
     chat: async () => fail(),
+    json: async () => fail(),
     stream: () => ({ [Symbol.asyncIterator]: async function* () { fail() } }),
     models: async () => fail(),
   }
@@ -153,6 +234,7 @@ export function getAi(): AiClient {
 /** 便捷单例：`import { ai } from '@chatu-ai/app-sdk'` */
 export const ai: AiClient = {
   chat: (m, o) => getAi().chat(m, o),
+  json: (m, o) => getAi().json(m, o),
   stream: (m, o) => getAi().stream(m, o),
   models: () => getAi().models(),
 }

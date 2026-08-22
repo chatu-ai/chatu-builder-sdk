@@ -85,3 +85,53 @@ d('ai without platform config', () => {
     await expect((async () => { for await (const _ of ai.stream('hi')) { /* noop */ } })()).rejects.toMatchObject({ code: 'AI_NOT_CONFIGURED' })
   })
 })
+
+d('ai.json（结构化输出）', () => {
+  const reply = (content: string) =>
+    new Response(JSON.stringify({ choices: [{ message: { content } }], model: 'm1' }), { status: 200 })
+
+  it('解析纯 JSON，并带上 response_format 与 schema 提示', async () => {
+    const calls: any[] = []
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)))
+      return reply('{"title":"买牛奶","done":false}')
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+
+    const schema = { type: 'object', properties: { title: { type: 'string' } } }
+    const out = await ai.json<{ title: string; done: boolean }>('提取待办', { schema })
+    expect(out).toEqual({ title: '买牛奶', done: false })
+    expect(calls[0].response_format).toEqual({ type: 'json_object' })
+    expect(JSON.stringify(calls[0].messages[0].content)).toContain('JSON Schema')
+  })
+
+  it('剥掉 ```json 代码围栏与前后废话', async () => {
+    const fetchImpl = (async () =>
+      reply('好的，结果如下：\n```json\n{"a":1}\n```')) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+    expect(await ai.json('x')).toEqual({ a: 1 })
+  })
+
+  it('校验不过会带着错误重试，第二次通过', async () => {
+    let n = 0
+    const fetchImpl = (async () => {
+      n += 1
+      return reply(n === 1 ? '{"count":"多"}' : '{"count":3}')
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+
+    const validate = (v: unknown) => {
+      const c = (v as { count: unknown }).count
+      if (typeof c !== 'number') throw new Error('count 必须是数字')
+      return { count: c }
+    }
+    expect(await ai.json('数一下', { validate })).toEqual({ count: 3 })
+    expect(n).toBe(2)
+  })
+
+  it('重试用尽仍不合格则抛 AppSdkError', async () => {
+    const fetchImpl = (async () => reply('不是 JSON')) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+    await expect(ai.json('x', { retries: 0 })).rejects.toMatchObject({ code: 'AI_INVALID_JSON' })
+  })
+})

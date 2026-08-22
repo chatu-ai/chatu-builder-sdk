@@ -7,6 +7,27 @@ description: 平台 LLM 中继（@chatu-ai/app-sdk 的 ai）。当应用需要 A
 
 平台托管的 OpenAI 兼容中继：**不需要 API Key、不需要选模型**，用量计入应用所有者的 ChatU 点数。
 
+
+## 结构化输出：`ai.json`
+
+需要"模型返回可直接用的对象"时不要让它回文本再自己抠字段——用 `ai.json`：强制只回 JSON、剥掉代码围栏、解析、可选校验，不合格会带着错误自动重试。
+
+```ts
+import { ai } from '@/lib/platform';
+import { z } from 'zod';
+
+const Result = z.object({ sentiment: z.enum(['正面', '中性', '负面']), reasons: z.array(z.string()).max(3) });
+
+const data = await ai.json(`判断这条评论的情绪：${comment}`, {
+  schema: z.toJSONSchema(Result),   // 告诉模型结构（zod v4）
+  validate: v => Result.parse(v),   // 不合格自动重试（默认 1 次）
+  retries: 2,
+});
+data.sentiment; // 类型安全
+```
+
+不传 `validate` 也能用（只解析不校验），但线上强烈建议配 zod —— 见 `chatu-validation`。
+
 ## API（只能在服务端调用）
 
 ```ts
@@ -77,21 +98,8 @@ for (;;) {
 
 ## 标准写法 C：要结构化结果（JSON）
 
-模型不保证输出合法 JSON——**必须容错**：
-
-```ts
-const { content } = await ai.chat([
-  { role: 'system', content: '抽取信息，只输出 JSON：{"name":string,"amount":number}，不要解释、不要代码块。' },
-  { role: 'user', content: text },
-], { temperature: 0 });
-
-function parseJson<T>(s: string): T | null {
-  const m = s.match(/\{[\s\S]*\}/);            // 容忍模型加了前后缀/代码块
-  try { return m ? (JSON.parse(m[0]) as T) : null; } catch { return null; }
-}
-const data = parseJson<{ name: string; amount: number }>(content);
-if (!data) return Response.json({ error: 'PARSE_FAILED' }, { status: 422 });
-```
+用上面的 `ai.json`，不要自己写"正则抠 JSON + try/catch"那一套（它是本 skill 的旧写法，已被 `ai.json` 取代）。
+只有在需要流式输出结构化内容时才手写解析。
 
 ## 边界与禁忌
 

@@ -174,7 +174,8 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 - 不要自己生成 JWT、不要把用户信息写进普通 Cookie / localStorage，会话只用 `chatu_session`（HttpOnly）。
 - 不要在客户端组件里 import `@/lib/platform` 的 auth；通过 Server Action 或 Route Handler 拿 `currentUser()` 的结果传下去。
 - 需要登录的页面要么 `await requireUser()`，要么在 Server Action 里再校验一次——只在前端隐藏按钮不算保护。
-- 单应用单环境上限 1 万用户、每日验证码 200 封（超出报 `CODE_QUOTA_EXCEEDED`）；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
+- 单应用单环境上限 1 万用户、每日验证码 200 封（超出报 `CODE_QUOTA_EXCEEDED`）、每日新注册 500 个（`SIGNUP_QUOTA_EXCEEDED`）；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
+- 密码登录同一邮箱连续失败 10 次会锁 15 分钟（`TOO_MANY_ATTEMPTS`）——登录页要把这个错误如实告诉用户，并提示"可以改用邮箱验证码登录"。
 - 只有邮箱登录；没有短信、没有微信/GitHub 第三方登录。用户要"手机号登录"时，如实说明当前只支持邮箱。
 
 ## 常见错误
@@ -185,6 +186,8 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 | 登录后刷新又变未登录 | 页面被静态预渲染 | 保留 layout 里的 `export const dynamic = "force-dynamic"` |
 | `EMAIL_NOT_CONFIGURED`（线上） | 平台未配置邮件通道 | 线上改用邮箱密码登录，或让用户联系平台开通 |
 | `CODE_RATE_LIMITED` | 同一邮箱 60 秒内重复发码 | 前端按钮加倒计时 |
+| `TOO_MANY_ATTEMPTS` | 密码连续输错 10 次，已锁定 15 分钟 | 提示改用验证码登录，或等锁定过期 |
+| `SIGNUP_QUOTA_EXCEEDED` | 当日新注册超过 500 | 正常应用不会触发；若被刷可在平台「用户」面板停用异常账号 |
 | `AUTH_UNSUPPORTED` | 应用被部署在没有平台数据服务的驱动上（如 edgeone blob） | 部署时选择带平台数据服务的目标 |
 | `READ_ONLY` / 无法注册新用户 | 应用所有者点数不足，数据已置只读 | 已登录用户仍可访问；充值后自动恢复 |
 | 停用了用户但他还能访问 | 会话缓存最长 30 秒 | 等待缓存过期，或把 `CHATU_AUTH_SESSION_CACHE` 设为 0 |

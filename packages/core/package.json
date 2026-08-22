@@ -1,6 +1,6 @@
 {
   "name": "@chatu-ai/builder-sdk",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "ChatU Builder client SDK core: REST + streaming client, zod event schemas, seq resume",
   "license": "MIT",
   "type": "module",

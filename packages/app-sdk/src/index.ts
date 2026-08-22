@@ -10,5 +10,6 @@ export type { StorageClient, StorageObject, StorageListResult, UploadUrlResult }
 export { auth, getAuth } from './auth.js'
 export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch } from './auth.js'
 export { ai, getAi } from './ai.js'
-export type { AiClient, AiMessage, AiChatOptions, AiChatResult, AiUsage } from './ai.js'
+export { extractJson } from './ai.js'
+export type { AiClient, AiMessage, AiChatOptions, AiChatResult, AiJsonOptions, AiUsage } from './ai.js'
 export { encodeKvKey, decodeKvKey } from './edgeone.js'
