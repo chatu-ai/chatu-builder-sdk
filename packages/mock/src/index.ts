@@ -102,6 +102,21 @@ export function createMockBuilderClient(script: MockScript): MockBuilderClient {
         if (i < 0) throw new Error(`mock: unknown version ${sha}`)
         versions.splice(0, i) // 回滚 = 丢弃更新的版本
       },
+      diff: async (_id, sha) => ({
+        sha,
+        message: versions.find(v => v.sha === sha)?.message ?? 'mock version',
+        files: [
+          { path: 'src/app/page.tsx', status: 'M', additions: 24, deletions: 6, binary: false },
+          { path: 'src/components/TodoList.tsx', status: 'A', additions: 88, deletions: 0, binary: false },
+          { path: 'public/old-logo.png', status: 'D', additions: 0, deletions: 0, binary: true },
+        ],
+        truncated: false,
+      }),
+      patch: async (_id, _sha, path) => ({
+        path,
+        patch: `--- a/${path}\n+++ b/${path}\n@@ -1,3 +1,4 @@\n context\n-old line\n+new line\n+added line\n`,
+        truncated: false,
+      }),
     },
     files: {
       tree: async () => tree,

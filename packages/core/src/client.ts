@@ -53,6 +53,18 @@ export interface SandboxStatus {
   phaseMessage?: string | null
 }
 export interface VersionInfo { sha: string; message: string; filesChanged: number; createdAt?: string }
+/** A 新增 / M 修改 / D 删除 / R 重命名 / C 复制 / T 类型变化 */
+export type VersionDiffStatus = 'A' | 'M' | 'D' | 'R' | 'C' | 'T'
+export interface VersionDiffFile {
+  path: string
+  oldPath?: string
+  status: VersionDiffStatus
+  additions: number
+  deletions: number
+  binary: boolean
+}
+export interface VersionDiff { sha: string; message: string; files: VersionDiffFile[]; truncated: boolean }
+export interface VersionFilePatch { path: string; patch: string; truncated: boolean }
 export interface FileNode { path: string; type: 'file' | 'dir'; children?: FileNode[] }
 
 export type CredentialScope = 'organization' | 'user' | 'conversation'
@@ -300,6 +312,10 @@ export interface BuilderClient {
   versions: {
     list(conversationId: string, opts?: { limit?: number }): Promise<VersionInfo[]>
     restore(conversationId: string, sha: string): Promise<void>
+    /** 该版本相对父提交改了哪些文件（只有清单与增删行数，正文用 patch 按需取） */
+    diff(conversationId: string, sha: string): Promise<VersionDiff>
+    /** 单个文件的 unified diff 正文 */
+    patch(conversationId: string, sha: string, path: string): Promise<VersionFilePatch>
   }
   files: {
     /** 文件树：默认只返回 path 的直接子项（depth=0），按需逐层展开；depth 最多 3 */
@@ -480,6 +496,14 @@ export function createBuilderClient(options: BuilderClientOptions): BuilderClien
         return Array.isArray(r) ? r : (r.versions ?? [])
       },
       restore: async (id, sha) => { await req(`/${id}/versions/${sha}/restore`, { method: 'POST' }) },
+      diff: async (id, sha) => {
+        const r = await req<Partial<VersionDiff>>(`/${id}/versions/${sha}/diff`)
+        return { sha, message: r.message ?? '', files: r.files ?? [], truncated: r.truncated ?? false }
+      },
+      patch: async (id, sha, path) => {
+        const r = await req<Partial<VersionFilePatch>>(`/${id}/versions/${sha}/diff?${qs({ path })}`)
+        return { path, patch: r.patch ?? '', truncated: r.truncated ?? false }
+      },
     },
     files: {
       // 服务端形状：{ tree: FileNode[] }
