@@ -18,6 +18,7 @@ description: 界面与样式规范（shadcn + Tailwind v4）。写页面/组件�
 - 需要未预装的 shadcn 组件：`npx shadcn@latest add <name>`；先想想已装 20 个能否组合出来。
 - 常用骨架：页面 = `<main className="mx-auto max-w-*xl px-4 py-10">` + 语义化 header；列表项/信息块用 `Card`；操作确认用 `Dialog`；侧边抽屉用 `Sheet`；轻提示用 `sonner` 的 `toast()`（client 组件里调用）。
 - 图标用 `lucide-react`，尺寸 `size-4`/`size-5` 与文字对齐。
+- 图表用 `recharts`（已预装，客户端组件里用）；动画优先 tailwind 过渡类，复杂编排用 `motion`（已预装，`import { motion } from "motion/react"`，不要装旧包名 framer-motion）。
 
 ## 三态齐全（列表/数据页必须有）
 
