@@ -5,8 +5,8 @@ Client SDKs for the ChatU **App Builder** — AI-driven app generation with a li
 | Package | npm |
 | --- | --- |
 | `@chatu-ai/builder-sdk` (core) | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk)](https://www.npmjs.com/package/@chatu-ai/builder-sdk) |
-| `@chatu-ai/builder-sdk-vue` | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk-vue)](https://www.npmjs.com/package/@chatu-ai/builder-sdk-vue) |
 | `@chatu-ai/builder-sdk-mock` | [![npm](https://img.shields.io/npm/v/@chatu-ai/builder-sdk-mock)](https://www.npmjs.com/package/@chatu-ai/builder-sdk-mock) |
+| `@chatu-ai/app-sdk` | [![npm](https://img.shields.io/npm/v/@chatu-ai/app-sdk)](https://www.npmjs.com/package/@chatu-ai/app-sdk) |
 
 ## 发布流程
 
@@ -26,9 +26,11 @@ git commit -am "release: v0.1.0" && git tag v0.1.0 && git push --tags
 | --- | --- | --- |
 | `@chatu-ai/builder-sdk` | A2A + REST client、zod 事件 schema（单一事实源）、seq 去重与断线重连 | P0 |
 | `@chatu-ai/builder-sdk-mock` | 脚本化事件回放（含断线注入），供 UI 先行开发 | P0 |
-| `@chatu-ai/builder-sdk-vue` | Vue 3 组合式 API 绑定 | P0–P1 |
+| `@chatu-ai/app-sdk` | 生成应用运行时（KV/DB/Storage/Auth/AI，多驱动可插拔） | P0 |
 | `@chatu-ai/builder-sdk-react` | React 绑定（对外开放主力） | P1 末–P2 |
 | `@chatu-ai/builder-sdk-embed` / `ai-tools` | 嵌入 widget / MCP 工具集 | P2 |
+
+> Vue 3 组合式 API 绑定已内联到 chat-web（`chat-web/src/composables/builder/`），不再作为独立包发布。
 
 ## 设计约束
 

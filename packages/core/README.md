@@ -20,6 +20,6 @@ const versions = await client.versions.list(conversationId)
 - `parseBuilderEvent` + seq-based resume for reconnect-safe consumption
 - No login-state assumptions: bring your own `AuthProvider`
 
-Vue bindings: [`@chatu-ai/builder-sdk-vue`](https://www.npmjs.com/package/@chatu-ai/builder-sdk-vue). Mock client for UI dev: [`@chatu-ai/builder-sdk-mock`](https://www.npmjs.com/package/@chatu-ai/builder-sdk-mock).
+Mock client for UI dev: [`@chatu-ai/builder-sdk-mock`](https://www.npmjs.com/package/@chatu-ai/builder-sdk-mock). Vue 3 composables 已内联到 chat-web（`chat-web/src/composables/builder/`），不再单独发布。
 
 MIT
