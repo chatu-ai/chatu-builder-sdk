@@ -20,6 +20,7 @@ description: 排错指南。预览白屏、报错、500、编译失败、样式�
 | `Event handlers cannot be passed to Client Component props` | 服务端组件把函数传给客户端 | 交互下沉到 client 组件；提交动作用 Server Action（`"use server"`） |
 | 调 `db/kv/storage/ai/currentUser` 报错或 500 | 在浏览器端调了平台能力 | 平台能力**只能在服务端**：Server Component / Server Action / Route Handler；客户端经 Server Action 中转 |
 | Hydration failed / 内容闪变 | SSR 与客户端首渲不一致（`Date.now()`、`Math.random()`、`toLocaleString` 直接进 JSX） | 随机/时间值放服务端算好当 props 传，或放 `useEffect` 后再渲染 |
+| `Property 'id' does not exist on type '() => Promise<AppUser \| null>'` | 把 `currentUser` 当对象用了——它是异步函数 | `const me = await currentUser(); me?.id`；同类：凡报错类型形如 `() => Promise<…>` 都是忘了调用/await |
 | 表单提交后 500 | `formData.get('x') as string` 断言，实际是 null/File | 用 zod `safeParse`（见 `chatu-validation`），失败分支要处理 |
 | 列表更新了但页面不变 | Server Action 后没刷新缓存 | Action 末尾 `revalidatePath('/路由')` |
 | `params`/`searchParams` 类型报错 | Next 16 里它们是 Promise | `const { id } = await params` |
