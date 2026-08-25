@@ -107,6 +107,15 @@ Never expose `CHATU_APP_KEY` to the browser. MIT.
 
 ## Agent skills
 
-The package ships `skills/chatu-{kv,db,storage,ai,auth,validation}/SKILL.md` — task-focused manuals for coding agents
-(standard rules, boilerplate, boundaries, common failure modes). The ChatU Builder sandbox copies them
-into the workspace `.claude/skills/` so Claude Code loads them on demand; they are versioned with the SDK.
+The package ships `skills/` — task-focused manuals for coding agents: capability skills
+(`chatu-{kv,db,storage,ai,auth,validation}`, one per SDK module) and process skills
+(`chatu-{quickstart,ui,debug}`, the quickstart one bundling copy-paste `recipes/`). The ChatU Builder
+sandbox copies them into the workspace `.claude/skills/` so Claude Code loads them on demand.
+
+**Source of truth is the [chatu-builder-skill](https://github.com/chatu-ai/chatu-builder-skill) repo**;
+`skills/` here is a synced copy for distribution. Two hard rules:
+
+1. **Any SDK API change (add / rename / signature / behavior) MUST update the matching skill in the
+   same changeset** — the skills are the agent's API docs; a stale skill makes agents write broken code.
+   Commit the skill change to the chatu-builder-skill repo AND sync the copy here.
+2. Skills must never contain secrets, internal hostnames, or real account data.

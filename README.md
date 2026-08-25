@@ -38,6 +38,7 @@ git commit -am "release: v0.1.0" && git tag v0.1.0 && git push --tags
 2. 事件 schema 以 `packages/core/src/events.ts`（zod）为单一事实源，服务端用导出的 JSON Schema 对偶校验
 3. A2A 传输层由宿主注入（`A2ATransport` 接口），不重写传输
 4. mock 与 core 同 schema，UI 联调换 client 零胶水
+5. **app-sdk 的 API 变更必须在同一批改动里更新对应 SKILL**：单一事实源在 [chatu-builder-skill](https://github.com/chatu-ai/chatu-builder-skill) 仓库，`packages/app-sdk/skills/` 是分发用同步副本，两边都要提交；SKILL 中严禁敏感信息
 
 ## 开发
 
