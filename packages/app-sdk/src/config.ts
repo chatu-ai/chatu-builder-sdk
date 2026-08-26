@@ -6,6 +6,14 @@
  */
 export type DriverKind = 'platform' | 'byo' | 'memory' | 'edgeone'
 
+/**
+ * 应用的登录模式（技术方案 23）：
+ * - `app`（默认）：应用自建用户体系（邮箱验证码 / 邮箱密码，首次登录自动注册）
+ * - `channel`：直接使用应用所属渠道的账号登录，**不提供注册**（账号由渠道侧开通）
+ * 由 CHATU_AUTH_MODE 或 configure({ authMode }) 指定；一个应用只用一种。
+ */
+export type AuthMode = 'app' | 'channel'
+
 export interface PlatformConfig {
   kind: 'platform'
   baseUrl: string
@@ -22,6 +30,8 @@ export interface PlatformConfig {
    * 覆盖：configure({ authSessionCacheSeconds }) 或环境变量 CHATU_AUTH_SESSION_CACHE。
    */
   authSessionCacheSeconds: number
+  /** 登录模式（默认 app）：channel 时 auth.login() 走渠道账号登录，注册/验证码接口不可用 */
+  authMode: AuthMode
 }
 export interface MemoryConfig { kind: 'memory' }
 /** 自带云资源（模式 A）：REDIS_URL → KV；S3_* → 对象存储（腾讯云 COS / MinIO / AWS 等 S3 兼容） */
@@ -59,6 +69,8 @@ export interface ConfigureOptions {
   model?: string
   /** auth.getSession() 进程内缓存秒数（默认 30，0 关闭） */
   authSessionCacheSeconds?: number
+  /** 登录模式（默认 app；channel = 用渠道账号登录，不提供注册） */
+  authMode?: AuthMode
 }
 
 let override: ConfigureOptions = {}
@@ -130,12 +142,26 @@ export function resolveConfig(): ResolvedConfig {
       aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
       aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
       authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
+      authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
     }
   }
   return { kind: 'memory' }
 }
 
 /** 会话缓存秒数：非法值回落到默认 30，上限 300（避免停用用户长时间仍可用） */
+/**
+ * 当前登录模式（任何驱动下都可用；memory 驱动也需要它来决定是否走渠道账号替身）。
+ */
+export function resolveAuthMode(): AuthMode {
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+  return normalizeAuthMode(override.authMode ?? proc?.env?.CHATU_AUTH_MODE)
+}
+
+/** 登录模式：只认 channel，其它一律按默认的 app 处理（配错不至于让应用登录不了） */
+function normalizeAuthMode(value: string | undefined): AuthMode {
+  return String(value ?? '').trim().toLowerCase() === 'channel' ? 'channel' : 'app'
+}
+
 function normalizeCacheSeconds(value: number | string | undefined): number {
   if (value === undefined || value === '') return 30
   const n = typeof value === 'number' ? value : Number(value)
@@ -180,6 +206,7 @@ export function resolveAiConfig(): PlatformConfig | null {
     aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
     aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
     authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
+    authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
   }
 }
 

@@ -1,6 +1,6 @@
 ---
 name: chatu-auth
-description: 应用自己的登录用户体系（@chatu-ai/app-sdk 的 auth）。当应用需要"登录后才能用""每个人只看到自己的数据""会员/后台/多人协作"时使用；提供邮箱验证码登录、邮箱密码登录、会话 Cookie、用户管理。禁止引入 next-auth/clerk/supabase-auth/firebase-auth/bcrypt/jose 等第三方登录库。
+description: 应用的登录用户体系（@chatu-ai/app-sdk 的 auth），两种模式：应用自建用户（邮箱验证码/密码，可自助注册）或直接用渠道已有账号登录（不注册）。当应用需要"登录后才能用""每个人只看到自己的数据""会员/后台/多人协作"时使用；含会话 Cookie 与用户管理。禁止引入 next-auth/clerk/supabase-auth/firebase-auth/bcrypt/jose 等第三方登录库。
 ---
 
 # 应用用户体系（auth）
@@ -15,6 +15,22 @@ description: 应用自己的登录用户体系（@chatu-ai/app-sdk 的 auth）�
 | 会员中心、后台管理页、只有登录用户能发帖/评论 | ✅ |
 | 多人协作（谁创建的、谁修改的） | ✅ |
 | 纯展示页、工具页、所有人看到同样内容 | ❌ 不要加登录，直接做 |
+
+## 两种模式：先问用户，不要替他选
+
+| | **应用自建用户**（默认） | **渠道账号** |
+| --- | --- | --- |
+| 用户是谁 | 任何访客，自己注册 | 应用所属渠道里已有的账号 |
+| 怎么登录 | 邮箱验证码 / 邮箱密码 | 渠道账号 + 密码（与登录渠道站点时一样） |
+| 能注册吗 | ✅ 首次登录自动注册 | ❌ 账号由渠道侧开通，应用内不提供注册 |
+| 忘记密码 | 改用邮箱验证码登录 | 去渠道站点重置，应用管不了 |
+| 适合 | 面向公众的产品、会员站 | 面向渠道内部既有用户的工具/后台 |
+
+**用户说"要登录"时，先问一句再动手**，例如：
+
+> 登录用哪种账号？① 让访客用邮箱自行注册登录；② 用你们渠道现有的账号直接登录（不开放注册）。
+
+模式由平台的环境变量 `CHATU_AUTH_MODE` 决定（`app` 默认 / `channel`），**你不要自己改它**——告诉用户选了哪种，由平台侧配置。写代码时按下面对应的那一节写。**一个应用只用一种模式。**
 
 ## API
 
@@ -33,7 +49,7 @@ const user = await signInWithCode(email, code, { name });  // 首次登录自动
 
 // 邮箱 + 密码（可选路线）
 await signUpWithPassword(email, password, { name });       // 密码 ≥ 6 位
-await signInWithPassword(email, password);
+await signInWithPassword(account, password);   // app 模式传邮箱；channel 模式传渠道账号
 
 await endSession();                        // 退出登录
 
@@ -43,75 +59,33 @@ await auth.users.update(id, { name: '新名字', disabled: true, meta: { role: '
 await auth.users.delete(id);
 ```
 
-`AppUser`：`{ id, email, name, avatar, createdAt, lastLoginAt, disabled, meta }`。密码永远不会回传。
+`AppUser`：`{ id, email, name, avatar, createdAt, lastLoginAt, disabled, meta }`（渠道账号模式另有 `username` / `source`，且 `email` 可能为 null）。密码永远不会回传。
 
 **登录态存在 HttpOnly Cookie 里**，`signIn*` / `endSession` 会写/删 Cookie —— 因此**只能在 Server Action 或 Route Handler 中调用**（Server Component 只能 `currentUser()` 读）。
 
-## 标准登录页（验证码，两步）
+## 应用自建用户：登录页
 
-```tsx
-// src/app/login/page.tsx
-import { redirect } from 'next/navigation';
-import { sendLoginCode, signInWithCode, currentUser } from '@/lib/platform';
+邮箱验证码两步式（推荐，用户不用记密码）；也可以走邮箱 + 密码。**完整可复制的登录页与退出按钮代码见 [references/login-app.md](references/login-app.md)**，要点：
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ email?: string; error?: string }> }) {
-  if (await currentUser()) redirect('/');
-  const { email, error } = await searchParams;
+- 登录页是 Server Component + Server Action，`signIn*` / `endSession` 只能在 action 或 Route Handler 里调（要写 Cookie）；
+- 发码按钮加 60 秒倒计时（服务端也有 60s 频控）；
+- 已登录访问登录页要 `redirect('/')`。
 
-  async function send(formData: FormData) {
-    'use server';
-    const value = String(formData.get('email') ?? '').trim();
-    if (!value) return;
-    await sendLoginCode(value);
-    redirect(`/login?email=${encodeURIComponent(value)}`);
-  }
 
-  async function verify(formData: FormData) {
-    'use server';
-    try {
-      await signInWithCode(String(formData.get('email')), String(formData.get('code')));
-    } catch {
-      redirect(`/login?email=${encodeURIComponent(String(formData.get('email')))}&error=1`);
-    }
-    redirect('/');
-  }
+## 渠道账号模式：登录页与差异
 
-  return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-4 p-6">
-      {!email ? (
-        <form action={send} className="space-y-3">
-          <input name="email" type="email" required placeholder="邮箱" className="w-full rounded-md border px-3 py-2" />
-          <button className="w-full rounded-md bg-primary px-3 py-2 text-primary-foreground">发送验证码</button>
-        </form>
-      ) : (
-        <form action={verify} className="space-y-3">
-          <input type="hidden" name="email" value={email} />
-          <p className="text-sm text-muted-foreground">验证码已发送至 {email}</p>
-          {error ? <p className="text-sm text-destructive">验证码不正确或已过期</p> : null}
-          <input name="code" inputMode="numeric" required placeholder="6 位验证码" className="w-full rounded-md border px-3 py-2" />
-          <button className="w-full rounded-md bg-primary px-3 py-2 text-primary-foreground">登录</button>
-        </form>
-      )}
-    </main>
-  );
-}
-```
+登录页只有**账号 + 密码**一步，没有注册入口、没有验证码。**完整代码见 [references/login-channel.md](references/login-channel.md)**。
 
-退出登录：
+与自建用户模式的差异：
 
-```tsx
-import { endSession } from '@/lib/platform';
-import { redirect } from 'next/navigation';
+| | 渠道账号模式 |
+| --- | --- |
+| 可用 | `currentUser()` / `requireUser()` / `signInWithPassword(账号, 密码)` / `endSession()` / `auth.users.list()` |
+| 不可用（会抛 `AUTH_MODE_UNSUPPORTED`） | `sendLoginCode()` / `signInWithCode()` / `signUpWithPassword()` |
+| 用户字段 | 多出 `username`（渠道账号名）与 `source: 'channel'`；`email` 取决于渠道资料，**可能为 null** |
+| 用户管理 | 只能看 + 在**本应用范围内**停用（不影响渠道账号本身）；不能改资料、不能删渠道账号 |
 
-export function SignOutButton() {
-  async function out() {
-    'use server';
-    await endSession();
-    redirect('/login');
-  }
-  return <form action={out}><button className="text-sm underline">退出登录</button></form>;
-}
-```
+**别做的事**：不要在登录页放"注册"按钮或"忘记密码"表单（应用没有这两个能力）；不要在代码里给账号拼 `渠道ID.` 前缀（服务端会拼）；不要因为 `email` 可能为空就用它当用户标识——**用 `user.id`**。
 
 ## 每个用户自己的数据
 
@@ -188,6 +162,9 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 | `CODE_RATE_LIMITED` | 同一邮箱 60 秒内重复发码 | 前端按钮加倒计时 |
 | `TOO_MANY_ATTEMPTS` | 密码连续输错 10 次，已锁定 15 分钟 | 提示改用验证码登录，或等锁定过期 |
 | `SIGNUP_QUOTA_EXCEEDED` | 当日新注册超过 500 | 正常应用不会触发；若被刷可在平台「用户」面板停用异常账号 |
+| `AUTH_MODE_UNSUPPORTED` | 渠道账号模式下调了注册/验证码接口 | 渠道模式没有注册；登录用 `signInWithPassword(账号, 密码)` |
+| `CHANNEL_AUTH_NOT_CONFIGURED` | 平台未给该渠道配好登录参数 | 应用侧解决不了，如实告知用户联系平台开通 |
+| `CHANNEL_AUTH_UNAVAILABLE` | 渠道登录服务暂时不可达 | 提示用户稍后重试，不要把它当成"密码错误"显示 |
 | `AUTH_UNSUPPORTED` | 应用被部署在没有平台数据服务的驱动上（如 edgeone blob） | 部署时选择带平台数据服务的目标 |
 | `READ_ONLY` / 无法注册新用户 | 应用所有者点数不足，数据已置只读 | 已登录用户仍可访问；充值后自动恢复 |
 | 停用了用户但他还能访问 | 会话缓存最长 30 秒 | 等待缓存过期，或把 `CHATU_AUTH_SESSION_CACHE` 设为 0 |

@@ -1,16 +1,21 @@
-import { configVersion, resolveConfig, type PlatformConfig } from './config.js'
+import { configVersion, resolveAuthMode, resolveConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
 
 /** 应用自己的终端用户（与 ChatU 平台账号无关） */
 export interface AppUser {
   id: string
-  email: string
+  /** 应用自建用户一定有；渠道账号模式下取决于渠道资料，可能为空 */
+  email: string | null
   name: string | null
   avatar: string | null
   createdAt: number
   lastLoginAt: number
   disabled: boolean
   meta: Record<string, unknown>
+  /** 渠道账号模式下的渠道账号名（裸账号，不含前缀）；应用自建用户没有此字段 */
+  username?: string
+  /** 用户来源：应用自建（缺省）或渠道账号 */
+  source?: 'channel'
 }
 
 export interface SignInResult { token: string; user: AppUser; created: boolean }
@@ -25,8 +30,12 @@ export interface AuthClient {
   verifyCode(email: string, code: string, opts?: { name?: string }): Promise<SignInResult>
   /** 邮箱 + 密码注册 */
   register(email: string, password: string, opts?: { name?: string }): Promise<SignInResult>
-  /** 邮箱 + 密码登录 */
-  login(email: string, password: string): Promise<SignInResult>
+  /**
+   * 密码登录。
+   * - app 模式（默认）：第一个参数是邮箱；
+   * - channel 模式：第一个参数是**渠道裸账号**（与登录渠道站点时输入的一致，不带前缀）。
+   */
+  login(account: string, password: string): Promise<SignInResult>
   /** 用会话 token 换当前用户；无效/过期/被禁用返回 null */
   getSession(token: string | null | undefined): Promise<AppUser | null>
   /** 退出登录（吊销该 token） */
@@ -36,6 +45,17 @@ export interface AuthClient {
     get(id: string): Promise<AppUser | null>
     update(id: string, patch: UserPatch): Promise<AppUser>
     delete(id: string): Promise<boolean>
+  }
+}
+
+/** channel 模式下这些能力不存在（账号在渠道侧开通，不走邮箱注册/验证码） */
+function requireAppMode(cfg: PlatformConfig, api: string): void {
+  if (cfg.authMode === 'channel') {
+    throw new AppSdkError(
+      'AUTH_MODE_UNSUPPORTED',
+      `当前应用使用渠道账号登录（CHATU_AUTH_MODE=channel），auth.${api}() 不可用；` +
+        '登录请用 auth.login(渠道账号, 密码)，账号由渠道侧开通，应用内不提供注册。',
+    )
   }
 }
 
@@ -64,19 +84,28 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
   }
   return {
     async sendCode(email) {
+      requireAppMode(cfg, 'sendCode')
       const r = await call<{ sent: boolean; devCode?: string | null }>('POST', '/code/send', { email })
       return { sent: r.sent, devCode: r.devCode ?? null }
     },
     async verifyCode(email, code, opts) {
+      requireAppMode(cfg, 'verifyCode')
       const r = await call<{ token: string; user: AppUser; created: boolean }>('POST', '/code/verify', { email, code, name: opts?.name })
       return { token: r.token, user: r.user, created: r.created }
     },
     async register(email, password, opts) {
+      requireAppMode(cfg, 'register')
       const r = await call<{ token: string; user: AppUser; created: boolean }>('POST', '/password/register', { email, password, name: opts?.name })
       return { token: r.token, user: r.user, created: r.created }
     },
-    async login(email, password) {
-      const r = await call<{ token: string; user: AppUser }>('POST', '/password/login', { email, password })
+    async login(account, password) {
+      if (cfg.authMode === 'channel') {
+        // 渠道账号登录：服务端代理渠道 SSO；username 传裸账号，前缀由服务端拼
+        const r = await call<{ token: string; user: AppUser; created?: boolean }>(
+          'POST', '/channel/login', { username: account, password })
+        return { token: r.token, user: r.user, created: r.created ?? false }
+      }
+      const r = await call<{ token: string; user: AppUser }>('POST', '/password/login', { email: account, password })
       return { token: r.token, user: r.user, created: false }
     },
     async getSession(token) {
@@ -131,7 +160,10 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
 }
 
 // ---------- memory driver（本机开发 / 测试；进程退出即丢失） ----------
-function memoryAuth(): AuthClient {
+/** memory 驱动在 channel 模式下的固定密码（仅本机/测试用，无任何真实校验） */
+const MEMORY_CHANNEL_PASSWORD = '123456'
+
+function memoryAuth(channelMode: boolean): AuthClient {
   const users = new Map<string, AppUser & { pwd?: string }>()
   /** 注册序号：同一毫秒创建的用户也要有稳定的先后顺序 */
   const seq = new Map<string, number>()
@@ -142,16 +174,18 @@ function memoryAuth(): AuthClient {
   const norm = (email: string) => email.trim().toLowerCase()
   const strip = (u: AppUser & { pwd?: string }): AppUser => { const { pwd: _pwd, ...rest } = u; return rest }
   const issue = (id: string) => { const token = `mem_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`; sessions.set(token, id); return token }
-  const create = (email: string, name?: string, pwd?: string) => {
+  const create = (email: string, name?: string, pwd?: string): AppUser & { pwd?: string } => {
     const now = Date.now()
-    const user = { id: `u${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`, email, name: name ?? email.split('@')[0]!, avatar: null, createdAt: now, lastLoginAt: now, disabled: false, meta: {}, pwd }
+    const user: AppUser & { pwd?: string } = { id: `u${now.toString(36)}${Math.random().toString(36).slice(2, 8)}`, email, name: name ?? email.split('@')[0]!, avatar: null, createdAt: now, lastLoginAt: now, disabled: false, meta: {}, pwd }
     users.set(user.id, user)
     seq.set(user.id, nextSeq++)
     byEmail.set(email, user.id)
     return user
   }
   return {
-    async sendCode(email) { const code = String(Math.floor(100000 + Math.random() * 900000)); codes.set(norm(email), code); return { sent: true, devCode: code } },
+    async sendCode(email) {
+      if (channelMode) throw new AppSdkError('AUTH_MODE_UNSUPPORTED', '渠道账号模式不提供验证码登录')
+      const code = String(Math.floor(100000 + Math.random() * 900000)); codes.set(norm(email), code); return { sent: true, devCode: code } },
     async verifyCode(email, code, opts) {
       const key = norm(email)
       if (codes.get(key) !== code.trim()) throw new AppSdkError('CODE_INVALID', '验证码不正确')
@@ -162,14 +196,27 @@ function memoryAuth(): AuthClient {
       return { token: issue(user.id), user: strip(user), created: !existingId }
     },
     async register(email, password, opts) {
+      if (channelMode) throw new AppSdkError('AUTH_MODE_UNSUPPORTED', '渠道账号模式不提供注册')
       const key = norm(email)
       if (byEmail.has(key)) throw new AppSdkError('EMAIL_TAKEN', '该邮箱已注册')
       if (password.length < 6) throw new AppSdkError('WEAK_PASSWORD', '密码至少 6 位')
       const user = create(key, opts?.name, password)
       return { token: issue(user.id), user: strip(user), created: true }
     },
-    async login(email, password) {
-      const id = byEmail.get(norm(email))
+    async login(account, password) {
+      if (channelMode) {
+        // 渠道账号模式的本机替身：固定密码，任意账号都能登入，方便没有渠道后端时联调页面
+        if (password !== MEMORY_CHANNEL_PASSWORD) throw new AppSdkError('INVALID_CREDENTIALS', '账号或密码不正确')
+        const key = norm(account)
+        const existingId = byEmail.get(key)
+        const user = existingId ? users.get(existingId)! : create(key, account)
+        if (user.disabled) throw new AppSdkError('USER_DISABLED', '该账号已被停用')
+        user.lastLoginAt = Date.now()
+        user.username = account
+        user.source = 'channel'
+        return { token: issue(user.id), user: strip(user), created: !existingId }
+      }
+      const id = byEmail.get(norm(account))
       const user = id ? users.get(id) : undefined
       if (!user || user.pwd !== password) throw new AppSdkError('INVALID_CREDENTIALS', '邮箱或密码不正确')
       if (user.disabled) throw new AppSdkError('USER_DISABLED', '该账号已被停用')
@@ -187,7 +234,7 @@ function memoryAuth(): AuthClient {
       async list(opts) {
         const kw = opts?.keyword?.trim().toLowerCase()
         const all = [...users.values()]
-          .filter(u => !kw || u.email.includes(kw) || (u.name ?? '').toLowerCase().includes(kw))
+          .filter(u => !kw || (u.email ?? '').includes(kw) || (u.name ?? '').toLowerCase().includes(kw) || (u.username ?? '').toLowerCase().includes(kw))
           .sort((a, b) => b.createdAt - a.createdAt || (seq.get(b.id) ?? 0) - (seq.get(a.id) ?? 0))
         const skip = opts?.skip ?? 0
         const limit = opts?.limit ?? 50
@@ -212,7 +259,7 @@ function memoryAuth(): AuthClient {
         const u = users.get(id)
         if (!u) return false
         for (const [t, uid] of [...sessions]) if (uid === id) sessions.delete(t)
-        byEmail.delete(u.email)
+        if (u.email) byEmail.delete(u.email)
         seq.delete(id)
         return users.delete(id)
       },
@@ -251,13 +298,13 @@ export function getAuth(): AuthClient {
   const cfg = resolveConfig()
   // 两种驱动都带进程内状态（platform 的会话缓存 / memory 的用户表）：并入 configure() 次数，重新配置即重建
   const key = cfg.kind === 'platform'
-    ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}|${cfg.authSessionCacheSeconds}|${configVersion()}`
-    : `${cfg.kind}|${configVersion()}`
+    ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}|${cfg.authSessionCacheSeconds}|${cfg.authMode}|${configVersion()}`
+    : `${cfg.kind}|${resolveAuthMode()}|${configVersion()}`
   if (!cached || cached.key !== key) {
     cached = {
       key,
       client: cfg.kind === 'platform' ? platformAuth(cfg)
-        : cfg.kind === 'memory' ? memoryAuth()
+        : cfg.kind === 'memory' ? memoryAuth(resolveAuthMode() === 'channel')
           : unsupportedAuth(cfg.kind),
     }
   }

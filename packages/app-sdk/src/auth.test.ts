@@ -142,3 +142,41 @@ d('auth platform driver', () => {
     await expect(auth.getSession('t')).rejects.toThrow(/不支持应用用户体系/)
   })
 })
+
+d('auth channel mode (渠道账号登录，技术方案 23)', () => {
+  beforeEach(() => configure({ driver: 'memory', authMode: 'channel' }))
+
+  it('用渠道裸账号登录，同一账号第二次登录复用同一用户', async () => {
+    const first = await auth.login('zhangsan', '123456')
+    expect(first.created).toBe(true)
+    expect(first.user.username).toBe('zhangsan')
+    expect(first.user.source).toBe('channel')
+    expect(await auth.getSession(first.token)).toMatchObject({ id: first.user.id })
+
+    const second = await auth.login('zhangsan', '123456')
+    expect(second.created).toBe(false)
+    expect(second.user.id).toBe(first.user.id)
+  })
+
+  it('密码不对时拒绝登录', async () => {
+    await expect(auth.login('zhangsan', 'wrong')).rejects.toThrow(/不正确/)
+  })
+
+  it('注册与验证码在渠道模式下明确不可用', async () => {
+    await expect(auth.sendCode('a@b.com')).rejects.toThrow(/渠道账号模式/)
+    await expect(auth.register('a@b.com', 'secret1')).rejects.toThrow(/渠道账号模式/)
+  })
+
+  it('停用后会话立即失效', async () => {
+    const { token, user } = await auth.login('lisi', '123456')
+    await auth.users.update(user.id, { disabled: true })
+    expect(await auth.getSession(token)).toBeNull()
+    await expect(auth.login('lisi', '123456')).rejects.toThrow(/停用/)
+  })
+
+  it('切回 app 模式后验证码登录恢复可用（配置变更会重建客户端）', async () => {
+    configure({ driver: 'memory', authMode: 'app' })
+    const { devCode } = await auth.sendCode('back@example.com')
+    expect(devCode).toMatch(/^\d{6}$/)
+  })
+})
