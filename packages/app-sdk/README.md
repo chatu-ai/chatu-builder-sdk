@@ -135,6 +135,8 @@ const { content, steps } = await ai.runTools('What is the weather in Shanghai?',
 
 `ai.chat(msgs, { tools })` returns `toolCalls` without executing anything, if you want to drive the loop yourself.
 
+`ai.stream` does **not** support tools (the SSE parser only reads text deltas) — passing them throws `AI_STREAM_TOOLS_UNSUPPORTED`.
+
 ### Embeddings and vector search
 
 ```ts

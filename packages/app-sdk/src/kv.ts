@@ -64,7 +64,7 @@ function memoryKv(): KvClient {
     async get(key) { return (live(key)?.value as any) ?? null },
     async set(key, value, opts) { store.set(key, { value, expiresAt: opts?.ex ? Date.now() + opts.ex * 1000 : undefined }) },
     async del(key) { return store.delete(key) },
-    async incr(key, by = 1) { const cur = Number(live(key)?.value ?? 0); if (!Number.isInteger(cur)) throw new AppSdkError('NOT_AN_INTEGER', 'value is not an integer'); const next = cur + by; store.set(key, { value: next }); return next },
+    async incr(key, by = 1) { const e = live(key); const cur = Number(e?.value ?? 0); if (!Number.isInteger(cur)) throw new AppSdkError('NOT_AN_INTEGER', 'value is not an integer'); const next = cur + by; store.set(key, { value: next, expiresAt: e?.expiresAt }); return next },
     async expire(key, seconds) { const e = live(key); if (!e) return false; e.expiresAt = Date.now() + seconds * 1000; return true },
     async mget(keys) { return keys.map(k => (live(k)?.value as any) ?? null) },
     async list(prefix = '', opts) {

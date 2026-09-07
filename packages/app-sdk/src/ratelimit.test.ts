@@ -24,6 +24,22 @@ d('ratelimit', () => {
     expect(keys).toContain(`sms:u1:${bucket}`)
   })
 
+  it('桶键会随窗口过期（incr 不会把 TTL 冲掉）', async () => {
+    const realNow = Date.now
+    let now = 1_700_000_000_000
+    Date.now = () => now
+    try {
+      await ratelimit('u1', { limit: 5, window: 60 })
+      await ratelimit('u1', { limit: 5, window: 60 })   // 第二次 incr 之后 TTL 必须还在
+      const bucketKey = `rl:u1:${Math.floor(Math.floor(now / 1000) / 60)}`
+      expect((await kv.list('rl:')).keys).toContain(bucketKey)
+      now += 121_000                                     // 超过 window * 2 的 TTL
+      expect(await kv.get(bucketKey)).toBeNull()
+    } finally {
+      Date.now = realNow
+    }
+  })
+
   it('进入下一个时间窗后计数重置', async () => {
     const realNow = Date.now
     let now = 1_700_000_000_000

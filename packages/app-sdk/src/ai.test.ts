@@ -126,6 +126,17 @@ d('ai.json（结构化输出）', () => {
     expect(calls.map(c => c.response_format.type)).toEqual(['json_schema', 'json_object'])
   })
 
+  it('schema 本身不合法（400 Invalid schema）不降级，原样抛错', async () => {
+    let n = 0
+    const fetchImpl = (async () => {
+      n += 1
+      return new Response(JSON.stringify({ error: { message: "Invalid schema for response_format 'result': 'additionalProperties' is required to be false", code: 'invalid_request_error' } }), { status: 400 })
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+    await expect(ai.json('x', { schema: { type: 'object' }, strict: true })).rejects.toMatchObject({ code: 'invalid_request_error', status: 400 })
+    expect(n).toBe(1)   // 不重发，不多计一次费
+  })
+
   it('validate 可以直接传 Standard Schema（zod 风格），不合格重试并带 issue 信息', async () => {
     const seen: string[] = []
     let n = 0
@@ -237,10 +248,19 @@ d('ai.chat：多模态与工具调用', () => {
       return new Response(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [{ id: 'c', type: 'function', function: { name: 'noop', arguments: '{}' } }] } }] }))
     }) as unknown as typeof fetch
     cfg(fetchImpl)
-    await expect(ai.runTools('x', { tools: [{ name: 'noop', execute: () => 'ok' }], maxRounds: 2 })).rejects.toMatchObject({ code: 'AI_TOOL_ROUNDS_EXCEEDED' })
+    let executed = 0
+    await expect(ai.runTools('x', { tools: [{ name: 'noop', execute: () => { executed += 1; return 'ok' } }], maxRounds: 2 })).rejects.toMatchObject({ code: 'AI_TOOL_ROUNDS_EXCEEDED' })
     expect(bodies.length).toBe(3)
     expect(bodies[0].tools).toBeDefined()
     expect(bodies[2].tools).toBeUndefined()
+    // 前两轮各执行一次；放弃的那一轮不能再执行工具（副作用会跑，调用方却只拿到异常）
+    expect(executed).toBe(2)
+  })
+
+  it('stream 传 tools 直接抛错（SSE 只解析文本增量，否则页面拿到空白）', () => {
+    cfg((async () => new Response('')) as unknown as typeof fetch)
+    expect(() => (ai as unknown as { stream: (m: string, o: unknown) => unknown }).stream('hi', { tools: [{ name: 'x' }] }))
+      .toThrow(/AI_STREAM_TOOLS_UNSUPPORTED|不支持工具调用/)
   })
 
   it('stream：迭代结束后 usage / content / finishReason 可读', async () => {
@@ -284,6 +304,15 @@ d('ai.embed / ai.ocr', () => {
     expect(calls[2]!.body.model).toBe('text-embedding-3-large')
     expect(await ai.embedMany([])).toEqual({ vectors: [] })
     expect(calls.length).toBe(3)
+  })
+
+  it('embed：服务端少给/越界返回向量时报错，不会把 undefined 当向量返回', async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }] }))) as unknown as typeof fetch
+    cfg(fetchImpl)
+    await expect(ai.embedMany(['a', 'b'])).rejects.toMatchObject({ code: 'AI_EMPTY_EMBEDDING' })
+    const outOfRange = (async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }, { index: 7, embedding: [0, 1] }] }))) as unknown as typeof fetch
+    cfg(outOfRange)
+    await expect(ai.embedMany(['a', 'b'])).rejects.toMatchObject({ code: 'AI_EMPTY_EMBEDDING' })
   })
 
   it('ocr：POST {origin}/document-intelligence/analyze，base64 + 附加能力位掩码，解析 content/pages', async () => {

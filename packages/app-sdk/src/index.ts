@@ -13,7 +13,7 @@ export { ai, getAi } from './ai.js'
 export { extractJson, toDataUrl } from './ai.js'
 export type {
   AiClient, AiMessage, AiContentPart, AiChatOptions, AiChatResult, AiJsonOptions, AiUsage,
-  AiTool, AiToolCall, AiRunToolsOptions, AiRunToolsResult, AiStream,
+  AiTool, AiToolCall, AiRunToolsOptions, AiRunToolsResult, AiStream, AiStreamOptions,
   AiEmbedOptions, AiEmbedManyResult, AiOcrOptions, AiOcrResult, AiOcrPage, AiOcrFeature,
 } from './ai.js'
 export { ratelimit } from './ratelimit.js'

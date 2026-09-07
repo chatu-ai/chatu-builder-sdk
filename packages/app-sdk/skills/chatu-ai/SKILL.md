@@ -136,6 +136,7 @@ const { content, steps } = await ai.runTools(question, {
 
 `execute` 里只做**只读查询或幂等操作**；删除/扣款这类动作要让模型只返回意图，由代码二次确认后执行。
 想自己控制循环就用 `ai.chat(msgs, { tools })`，它只返回 `toolCalls` 不执行。
+`ai.stream` **不支持工具**（流式只吐文本增量），传了会抛 `AI_STREAM_TOOLS_UNSUPPORTED`；要边用工具边流式，先 `runTools` 拿结果再流式复述。
 
 ## 语义检索 / 知识库（RAG）
 

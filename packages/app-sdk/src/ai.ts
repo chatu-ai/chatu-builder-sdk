@@ -52,6 +52,9 @@ export interface AiChatOptions {
   extra?: Record<string, unknown>
 }
 
+/** ai.stream 的选项：流式不支持工具调用（SSE 增量里的 tool_calls 不解析），要用工具走 ai.runTools / ai.chat */
+export type AiStreamOptions = Omit<AiChatOptions, 'tools' | 'toolChoice'>
+
 export interface AiUsage { promptTokens?: number; completionTokens?: number; totalTokens?: number }
 export interface AiChatResult {
   content: string
@@ -143,8 +146,8 @@ export interface AiClient {
    * 用它替代"让模型回一段文本再自己正则抠字段"。
    */
   json<T = unknown>(messages: AiMessage[] | string, opts?: AiJsonOptions<T>): Promise<T>
-  /** 流式对话，逐段产出文本增量；迭代结束后可读 usage / content */
-  stream(messages: AiMessage[] | string, opts?: AiChatOptions): AiStream
+  /** 流式对话，逐段产出文本增量；迭代结束后可读 usage / content。不支持 tools（传了会抛错） */
+  stream(messages: AiMessage[] | string, opts?: AiStreamOptions): AiStream
   /**
    * 工具调用循环：模型要调工具 → 执行 tools[].execute → 结果回填 → 直到模型给出最终回复。
    * 适合"查订单 / 查天气 / 算价格再回答"的智能体场景。
@@ -307,11 +310,18 @@ function jsonSchemaOf(schema: StandardSchemaV1): Record<string, unknown> | undef
   try { return typeof s.toJSONSchema === 'function' ? s.toJSONSchema() : undefined } catch { return undefined }
 }
 
-/** 请求体里带 json_schema 时服务端/模型不支持的典型返回：400/422 且提示 response_format */
+/**
+ * 判断"这个中继/模型不认识 json_schema"，只有这种情况才值得降级重发。
+ * 必须同时命中「提到 response_format/json_schema」和「不支持/无法识别」两类措辞——
+ * 光看到 schema 字样就降级的话，`Invalid schema for response_format`（strict 模式下 schema 自己写错）
+ * 会被误判成中继不支持：strict 静默失效、真正的错误被吞掉，还白白多计一次费。
+ */
 function isResponseFormatRejected(err: unknown): boolean {
   if (!(err instanceof AppSdkError)) return false
   if (err.status !== 400 && err.status !== 422) return false
-  return /response_format|json_schema|schema/i.test(err.message)
+  const msg = err.message
+  if (!/response_format|json_schema/i.test(msg)) return false
+  return /not support|unsupported|unrecogni[sz]ed|unknown|not allowed|不支持|无法识别|未知/i.test(msg)
 }
 
 /** ai.json 的公共逻辑：约束提示 + response_format（json_schema → json_object 降级）+ 解析 + 校验 + 带错误重试 */
@@ -394,6 +404,8 @@ async function runToolsLoop(
       history.push({ role: 'assistant', content: result.content })
       return { ...result, usage, messages: history, steps }
     }
+    // 最后一轮已经不给 tools 了还要调工具：直接放弃，不能先执行（execute 的副作用会跑，调用方却只拿到异常）
+    if (last) throw new AppSdkError('AI_TOOL_ROUNDS_EXCEEDED', `工具调用超过 ${String(maxRounds)} 轮仍未结束`)
     history.push({ role: 'assistant', content: result.content ?? '', toolCalls: result.toolCalls })
     for (const call of result.toolCalls) {
       const tool = byName.get(call.name)
@@ -454,6 +466,10 @@ function platformAi(cfg: PlatformConfig): AiClient {
       return jsonWithRetry((msgs, o) => this.chat(msgs, o), messages, opts)
     },
     stream(messages, opts) {
+      // 传了 tools 也只会流出空内容（下面只解析 delta.content），与其让页面渲染空白，不如当场报错
+      if ((opts as AiChatOptions | undefined)?.tools?.length) {
+        throw new AppSdkError('AI_STREAM_TOOLS_UNSUPPORTED', 'ai.stream 不支持工具调用：改用 ai.runTools（自动执行）或 ai.chat（自己处理 toolCalls）')
+      }
       const start = async (): Promise<ReadableStream<Uint8Array>> => {
         const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/chat/completions`, {
           method: 'POST', headers: { ...headers, accept: 'text/event-stream' }, body: JSON.stringify(buildBody(cfg, messages, opts, true)), signal: opts?.signal,
@@ -494,11 +510,15 @@ function platformAi(cfg: PlatformConfig): AiClient {
       if (!res.ok) await throwHttpError(res, 'ai.embed')
       const json: any = await res.json()
       const data: any[] = Array.isArray(json?.data) ? json.data : []
-      // 按 index 归位，服务端可能乱序返回
-      const vectors: number[][] = new Array(texts.length)
-      data.forEach((d, i) => { const idx = typeof d?.index === 'number' ? d.index : i; if (Array.isArray(d?.embedding)) vectors[idx] = d.embedding })
-      if (vectors.some(v => !v)) throw new AppSdkError('AI_EMPTY_EMBEDDING', `ai.embedMany: 期望 ${texts.length} 条向量，实际 ${data.length} 条`)
-      return { vectors, model: typeof json?.model === 'string' ? json.model : undefined, usage: parseUsage(json?.usage) }
+      // 按 index 归位（服务端可能乱序返回）；用 fill 建成密集数组，否则下面的缺漏检查会跳过空洞
+      const vectors: Array<number[] | undefined> = new Array<number[] | undefined>(texts.length).fill(undefined)
+      data.forEach((d, i) => {
+        const idx = typeof d?.index === 'number' ? d.index : i
+        if (idx >= 0 && idx < texts.length && Array.isArray(d?.embedding)) vectors[idx] = d.embedding
+      })
+      const missing = vectors.findIndex(v => v === undefined)
+      if (missing >= 0) throw new AppSdkError('AI_EMPTY_EMBEDDING', `ai.embedMany: 第 ${String(missing)} 条文本没拿到向量（期望 ${String(texts.length)} 条，实际 ${String(data.length)} 条）`)
+      return { vectors: vectors as number[][], model: typeof json?.model === 'string' ? json.model : undefined, usage: parseUsage(json?.usage) }
     },
     async ocr(file, opts) {
       const bytes = file instanceof Blob ? new Uint8Array(await file.arrayBuffer()) : file
