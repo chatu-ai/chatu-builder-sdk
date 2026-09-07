@@ -26,12 +26,15 @@ const src = await storage.url('avatars/u1.png', { expiresIn: 3600 })         // 
 
 ```ts
 const data = await ai.json('extract {title, amount} from: ' + text, {
-  schema: z.toJSONSchema(Schema),   // optional, sent to the model
-  validate: v => Schema.parse(v),   // optional; a failure is retried with the error message
+  schema: z.toJSONSchema(Schema),   // JSON Schema → sent as response_format: json_schema (hard constraint)
+  validate: Schema,                 // a zod/valibot schema, or v => Schema.parse(v); failures are retried with the error
 })
 ```
 
 `ai.json` forces JSON-only output, strips code fences, parses, validates, and retries once by default.
+With a JSON Schema it uses `response_format: { type: 'json_schema' }` and falls back to `json_object`
+automatically when the model or relay rejects it. `strict: true` additionally asks for OpenAI strict mode
+(every object needs `additionalProperties: false`).
 
 ## Auth (app users)
 
@@ -67,6 +70,7 @@ Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by defaul
 | `CHATU_DATA_URL` + `CHATU_APP_KEY` | same as the Data API — the AI base URL is derived by replacing the trailing `/data/v1` with `/v1` |
 | `CHATU_AI_URL` (optional) | explicit override of the AI base URL, e.g. `https://api.chatuapi.com/v1` |
 | `CHATU_AI_MODEL` / `PRIMARY_MODEL` (optional) | default model id when the caller does not pass `model`; the Builder sandbox sets `PRIMARY_MODEL`; if neither is set the server default is used |
+| `CHATU_AI_EMBED_MODEL` (optional) | default embedding model for `ai.embed` / `ai.embedMany`; defaults to `text-embedding-3-small` (allowed: `text-embedding-3-small` / `text-embedding-3-large` / `text-embedding-ada-002`) |
 
 ```ts
 // app/api/summarize/route.ts — one-shot
@@ -102,6 +106,88 @@ export async function POST(req: Request) {
 ```
 
 `ai.chat('hello')` accepts a plain string as a single user message; `ai.models()` lists available model ids. Without platform env vars (memory / byo drivers) every call rejects with `AppSdkError('AI_NOT_CONFIGURED')` — there is no local fallback for LLM calls.
+
+### Vision (image understanding)
+
+```ts
+import { ai, toDataUrl } from '@chatu-ai/app-sdk'
+
+const bytes = new Uint8Array(await file.arrayBuffer())
+const { content } = await ai.chat([{ role: 'user', content: [
+  { type: 'text', text: 'What is in this picture?' },
+  { type: 'image_url', image_url: { url: toDataUrl(bytes, file.type), detail: 'low' } },  // or a public https URL
+] }])
+```
+
+### Tools (function calling)
+
+```ts
+const { content, steps } = await ai.runTools('What is the weather in Shanghai?', {
+  tools: [{
+    name: 'getWeather',
+    description: 'Look up the weather for a city',
+    parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] },
+    execute: async ({ city }) => await lookup(city),      // result is JSON-serialized back to the model
+  }],
+  maxRounds: 5,                                           // last round drops the tools so the model must answer
+})
+```
+
+`ai.chat(msgs, { tools })` returns `toolCalls` without executing anything, if you want to drive the loop yourself.
+
+### Embeddings and vector search
+
+```ts
+import { ai, db, splitText, vectorSearch } from '@chatu-ai/app-sdk'
+
+// index
+const chunks = splitText(longText, { chunkSize: 500, overlap: 50 })
+const { vectors } = await ai.embedMany(chunks)             // batch of ≤100 per call
+const coll = db.collection('kb')
+for (const [i, text] of chunks.entries()) await coll.insert({ docId, text, embedding: vectors[i] })
+
+// search
+const hits = await vectorSearch(coll, await ai.embed(question), { filter: { docId }, topK: 5, minScore: 0.3 })
+const context = hits.map(h => h.item.text).join('\n---\n')
+```
+
+Similarity is cosine, computed **in process** over the candidates the filter returns (200 docs per page,
+`scanLimit` 2000 by default) — there is no server-side vector index, so keep a single search under a few
+thousand candidates and narrow it with `filter`. The returned docs have the vector field stripped.
+
+### OCR / document parsing
+
+```ts
+const { content, pages } = await ai.ocr(bytes, {          // Uint8Array | ArrayBuffer | Blob
+  filename: 'invoice.pdf',                                // pdf / png / jpg / tiff / docx / xlsx / pptx / html
+  features: ['keyValuePairs', 'queryFields'],             // optional add-ons, each billed per page
+  queryFields: ['invoice number', 'total'],
+})
+// content is Markdown (tables included) — feed it straight to ai.chat / ai.json
+```
+
+Billed per page; add-ons are billed per page on top. Raw Azure Document Intelligence output stays in `.raw`.
+
+## Rate limiting
+
+```ts
+import { ratelimit } from '@chatu-ai/app-sdk'
+
+const { ok, reset } = await ratelimit(`ai:${userId}`, { limit: 20, window: 3600 })
+if (!ok) return Response.json({ error: 'too many requests' }, { status: 429, headers: { 'retry-after': String(reset) } })
+```
+
+Fixed window on top of `kv.incr` (keys are bucketed by `floor(now / window)`), so it works on every driver.
+
+## Validated reads
+
+```ts
+const profile = await kv.get('profile:1', ProfileSchema)   // any Standard Schema: zod ≥3.24 / zod 4 / valibot
+```
+
+Returns `null` when the key is missing, throws `AppSdkError('INVALID_DATA')` when the stored value drifted
+from the schema. The SDK has **no** runtime dependency on a validation library — it only speaks the
+[Standard Schema](https://standardschema.dev) interface.
 
 Never expose `CHATU_APP_KEY` to the browser. MIT.
 

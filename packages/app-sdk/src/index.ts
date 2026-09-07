@@ -10,6 +10,16 @@ export type { StorageClient, StorageObject, StorageListResult, UploadUrlResult }
 export { auth, getAuth } from './auth.js'
 export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch } from './auth.js'
 export { ai, getAi } from './ai.js'
-export { extractJson } from './ai.js'
-export type { AiClient, AiMessage, AiChatOptions, AiChatResult, AiJsonOptions, AiUsage } from './ai.js'
+export { extractJson, toDataUrl } from './ai.js'
+export type {
+  AiClient, AiMessage, AiContentPart, AiChatOptions, AiChatResult, AiJsonOptions, AiUsage,
+  AiTool, AiToolCall, AiRunToolsOptions, AiRunToolsResult, AiStream,
+  AiEmbedOptions, AiEmbedManyResult, AiOcrOptions, AiOcrResult, AiOcrPage, AiOcrFeature,
+} from './ai.js'
+export { ratelimit } from './ratelimit.js'
+export type { RatelimitOptions, RatelimitResult } from './ratelimit.js'
+export { cosineSimilarity, rankBySimilarity, vectorSearch, splitText } from './vector.js'
+export type { RankOptions, Ranked, VectorSearchOptions, SplitTextOptions } from './vector.js'
+export { validateWith, isStandardSchema } from './schema.js'
+export type { StandardSchemaV1 } from './schema.js'
 export { encodeKvKey, decodeKvKey } from './edgeone.js'

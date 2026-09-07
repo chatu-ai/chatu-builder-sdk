@@ -24,6 +24,8 @@ export interface PlatformConfig {
   aiBaseUrl: string
   /** 默认模型：CHATU_AI_MODEL → PRIMARY_MODEL（沙箱注入的平台默认模型）；都没有则不传，由服务端决定 */
   aiModel?: string
+  /** 默认 embedding 模型：CHATU_AI_EMBED_MODEL，缺省 text-embedding-3-small（服务端要求显式传 model） */
+  aiEmbedModel: string
   /**
    * auth.getSession() 的进程内缓存秒数（默认 30，0 关闭）。
    * 会话校验每个请求都会发生，缓存能显著减少计费的 auth 调用；代价是"停用用户"最多延迟这么久生效。
@@ -67,11 +69,16 @@ export interface ConfigureOptions {
   aiBaseUrl?: string
   /** LLM 默认模型 */
   model?: string
+  /** embedding 默认模型（缺省 text-embedding-3-small） */
+  embedModel?: string
   /** auth.getSession() 进程内缓存秒数（默认 30，0 关闭） */
   authSessionCacheSeconds?: number
   /** 登录模式（默认 app；channel = 用渠道账号登录，不提供注册） */
   authMode?: AuthMode
 }
+
+/** 平台开放的 embedding 模型之一（服务端白名单：text-embedding-3-small / 3-large / ada-002） */
+export const DEFAULT_EMBED_MODEL = 'text-embedding-3-small'
 
 let override: ConfigureOptions = {}
 let version = 0
@@ -141,6 +148,7 @@ export function resolveConfig(): ResolvedConfig {
       fetchImpl: override.fetchImpl ?? fetch,
       aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
       aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+      aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
       authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
       authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
     }
@@ -205,6 +213,7 @@ export function resolveAiConfig(): PlatformConfig | null {
     fetchImpl: override.fetchImpl ?? fetch,
     aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
     aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+    aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
     authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
     authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
   }

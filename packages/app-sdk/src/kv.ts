@@ -2,12 +2,18 @@ import { resolveConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
 import { byoKv } from './byo.js'
 import { edgeoneKv } from './edgeone.js'
+import { validateWith, type StandardSchemaV1 } from './schema.js'
 
 export interface KvSetOptions { /** 过期秒数 */ ex?: number }
 export interface KvListResult { keys: string[]; nextCursor: string | null }
 
 export interface KvClient {
   get<T = unknown>(key: string): Promise<T | null>
+  /**
+   * 带 schema 的读取（zod / valibot 等 Standard Schema）：存在则校验并收窄类型，不合格抛 AppSdkError('INVALID_DATA')。
+   * 用它替代 `kv.get<T>()` 的裸断言——线上数据结构漂移时能在读取处就暴露，而不是在渲染时炸。
+   */
+  get<T>(key: string, schema: StandardSchemaV1<unknown, T>): Promise<T | null>
   set(key: string, value: unknown, opts?: KvSetOptions): Promise<void>
   del(key: string): Promise<boolean>
   incr(key: string, by?: number): Promise<number>
@@ -77,13 +83,25 @@ let cached: { key: string; client: KvClient } | null = null
 export function getKv(): KvClient {
   const cfg = resolveConfig()
   const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.redisUrl ?? ''}|${cfg.kvPrefix}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.kvStore}|${cfg.projectId ?? ''}` : 'memory'
-  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformKv(cfg) : cfg.kind === 'byo' ? byoKv(cfg, memoryKv()) : cfg.kind === 'edgeone' ? edgeoneKv(cfg) : memoryKv() }
+  if (!cached || cached.key !== key) cached = { key, client: withSchema(cfg.kind === 'platform' ? platformKv(cfg) : cfg.kind === 'byo' ? byoKv(cfg, memoryKv()) : cfg.kind === 'edgeone' ? edgeoneKv(cfg) : memoryKv()) }
   return cached.client
+}
+
+/** 给任意驱动补上 `get(key, schema)`：驱动只实现裸 get，校验统一在这一层做 */
+function withSchema(inner: KvClient): KvClient {
+  return {
+    ...inner,
+    async get(key: string, schema?: StandardSchemaV1<unknown, any>) {
+      const value = await inner.get(key)
+      if (value === null || !schema) return value
+      return validateWith(schema, value, 'INVALID_DATA', `kv "${key}"`)
+    },
+  }
 }
 
 /** 便捷单例：`import { kv } from '@chatu-ai/app-sdk'` */
 export const kv: KvClient = {
-  get: (k) => getKv().get(k),
+  get: (k: string, s?: StandardSchemaV1<unknown, any>) => (s ? getKv().get(k, s) : getKv().get(k)),
   set: (k, v, o) => getKv().set(k, v, o),
   del: (k) => getKv().del(k),
   incr: (k, b) => getKv().incr(k, b),

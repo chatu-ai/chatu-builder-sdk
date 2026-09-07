@@ -93,13 +93,21 @@ const Extracted = z.object({
 });
 
 const data = await ai.json('从这段文字里抽取标题、金额、标签：' + text, {
-  schema: z.toJSONSchema(Extracted),     // 让模型知道该回什么（zod v4）
-  validate: v => Extracted.parse(v),      // 不合格会自动带着错误重试一次
+  schema: z.toJSONSchema(Extracted),     // 让模型知道该回什么（zod v4），并作为 response_format 硬约束
+  validate: Extracted,                    // 直接传 schema 即可；不合格会自动带着错误重试一次
 });
 // data 已经是 { title: string; amount: number; tags: string[] }
 ```
 
 `ai.json` 会：强制只回 JSON → 剥掉代码围栏 → 解析 → 跑 `validate` → 不合格就把错误发回模型重试（默认 1 次）。详见 `chatu-ai`。
+
+## 读出来的数据也要校验
+
+存进去的结构会随需求变，老数据不会自动跟着变。`kv.get` 接受 schema，读到不合格的值直接抛 `INVALID_DATA`：
+
+```ts
+const profile = await kv.get(`profile:${userId}`, Profile);   // Profile | null；不合格抛错，而不是渲染时白屏
+```
 
 ## 常用写法速查
 

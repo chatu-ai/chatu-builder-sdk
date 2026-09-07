@@ -1,6 +1,6 @@
 ---
 name: chatu-kv
-description: 平台托管 KV 存储（@chatu-ai/app-sdk 的 kv）。当应用需要保存任何数据——待办、笔记、配置、计数器、用户提交的内容、列表数据——时使用。禁止引入 supabase/prisma/mongoose/mysql/redis 等外部数据库。
+description: 平台托管 KV 存储与限流（@chatu-ai/app-sdk 的 kv、ratelimit）。当应用需要保存任何数据——待办、笔记、配置、计数器、用户提交的内容、列表数据——或需要给接口限流/防刷（AI 调用、验证码、表单提交）时使用。禁止引入 supabase/prisma/mongoose/mysql/redis 等外部数据库。
 ---
 
 # KV 存储（kv）
@@ -25,6 +25,18 @@ const removed = await kv.del('todo:abc');                       // boolean
 const n = await kv.incr('views');                               // 原子自增，返回新值；incr('views', 5) 加 5
 await kv.expire('draft:1', 3600);                               // 给已有键设过期
 const { keys, nextCursor } = await kv.list('todo:', { limit: 100 }); // 按前缀列键（分页游标）
+```
+
+### 带校验的读取（推荐）
+
+`kv.get(key, schema)` 直接收 zod schema：不存在返回 `null`，存在但结构不对抛 `INVALID_DATA`。
+比 `kv.get<Todo>()` 的裸断言安全——数据结构改过之后，问题在读取处就暴露，而不是渲染时白屏。
+
+```ts
+import { z } from 'zod';
+const Todo = z.object({ id: z.string(), title: z.string(), done: z.boolean(), createdAt: z.number() });
+
+const todo = await kv.get('todo:abc', Todo);   // Todo | null，类型自动收窄
 ```
 
 ## 标准写法：列表型数据用「前缀 + 逐条键」
@@ -83,6 +95,26 @@ export default async function Home() {
 - `实体:id`（`todo:uuid`）、`用户维度 用户:实体:id`（`u:${userId}:todo:${id}`），保证能用 `list(前缀)` 查出来。
 - 键里不要放中文/空格；用 `crypto.randomUUID()` 或时间戳生成 id。
 
+## 限流：`ratelimit`
+
+**所有 AI 接口、验证码、公开的写接口都要限流**，否则一个循环脚本就能刷光点数 / 灌满数据。
+
+```ts
+// src/app/api/ask/route.ts
+import { ratelimit } from '@/lib/platform';
+
+export async function POST(req: Request) {
+  const who = user?.id ?? req.headers.get('x-forwarded-for') ?? 'anon';
+  const { ok, reset, remaining } = await ratelimit(`ask:${who}`, { limit: 20, window: 3600 }); // 每小时 20 次
+  if (!ok) return Response.json({ error: '请求太频繁，请稍后再试' }, { status: 429, headers: { 'retry-after': String(reset) } });
+  // …正常处理
+}
+```
+
+- `window` 是秒；固定窗口计数，`reset` 是距本窗口重置的秒数，可直接放进 `Retry-After`。
+- key 要带上主体（用户 id / IP / 手机号）；不同用途用不同前缀：`ratelimit(phone, { limit: 5, window: 86400, prefix: 'sms' })`。
+- 登录用户按 id 限、匿名按 IP 限；两条都加最稳。
+
 ## 边界与禁忌
 
 - **只在服务端**：Server Component / Server Action / Route Handler。前端 import 会直接报错或泄漏密钥。
@@ -90,6 +122,7 @@ export default async function Home() {
 - `list()` 是按前缀扫描，别在热路径上对上万条数据做全量 `list`+`mget`；分页展示时用 `limit` + `nextCursor`。
 - 没有事务/多键原子操作；计数器用 `incr` 而不是 `get` 后 `set`。
 - 不要引入 redis/ioredis 客户端——`kv` 已经是托管服务。
+- 计数/限流不要用 `get` 后 `set`（会丢计数）；用 `incr` 或 `ratelimit`。
 
 ## 常见错误
 

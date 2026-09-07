@@ -52,3 +52,28 @@ d('byo driver', () => {
     configure({ driver: 'memory' })
   })
 })
+
+d('kv.get(key, schema)（Standard Schema 校验）', () => {
+  const schema = {
+    '~standard': {
+      version: 1 as const,
+      vendor: 'test',
+      validate: (v: unknown) =>
+        typeof (v as any)?.count === 'number'
+          ? { value: v as { count: number } }
+          : { issues: [{ message: '必须是数字', path: ['count'] }] },
+    },
+  }
+
+  beforeEach(() => configure({ driver: 'memory' }))
+
+  it('合格则收窄类型，不存在返回 null，不合格抛 INVALID_DATA', async () => {
+    await kv.set('stat', { count: 3 })
+    const ok = await kv.get('stat', schema)
+    expect(ok?.count).toBe(3)
+    expect(await kv.get('missing', schema)).toBeNull()
+    await kv.set('stat', { count: '多' })
+    await expect(kv.get('stat', schema)).rejects.toMatchObject({ code: 'INVALID_DATA' })
+    await expect(kv.get('stat', schema)).rejects.toThrow(/kv "stat".*count: 必须是数字/)
+  })
+})
