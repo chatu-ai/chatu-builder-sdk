@@ -126,6 +126,25 @@ d('ai.json（结构化输出）', () => {
     expect(calls.map(c => c.response_format.type)).toEqual(['json_schema', 'json_object'])
   })
 
+  it('中继只支持 text/json_object 时降级（各家措辞不同，不能靠列举"不支持"）', async () => {
+    for (const message of [
+      "Invalid value: 'json_schema'. Supported values are: 'text' and 'json_object'.",
+      'response_format.type only support text and json_object',
+      "Input should be 'text' or 'json_object'",
+    ]) {
+      const calls: any[] = []
+      const fetchImpl = (async (_u: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body))
+        calls.push(body)
+        if (body.response_format?.type === 'json_schema') return new Response(JSON.stringify({ error: { message } }), { status: 400 })
+        return reply('{"ok":true}')
+      }) as unknown as typeof fetch
+      configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+      expect(await ai.json('x', { schema: { type: 'object' } })).toEqual({ ok: true })
+      expect(calls.map(c => c.response_format.type)).toEqual(['json_schema', 'json_object'])
+    }
+  })
+
   it('schema 本身不合法（400 Invalid schema）不降级，原样抛错', async () => {
     let n = 0
     const fetchImpl = (async () => {
@@ -135,6 +154,17 @@ d('ai.json（结构化输出）', () => {
     configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
     await expect(ai.json('x', { schema: { type: 'object' }, strict: true })).rejects.toMatchObject({ code: 'invalid_request_error', status: 400 })
     expect(n).toBe(1)   // 不重发，不多计一次费
+  })
+
+  it('schema 校验类报错（Additional properties are not allowed）同样不降级', async () => {
+    let n = 0
+    const fetchImpl = (async () => {
+      n += 1
+      return new Response(JSON.stringify({ error: { message: "Invalid schema for response_format 'result': Additional properties are not allowed ('foo' was unexpected)" } }), { status: 400 })
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', fetchImpl })
+    await expect(ai.json('x', { schema: { type: 'object' } })).rejects.toMatchObject({ status: 400 })
+    expect(n).toBe(1)
   })
 
   it('validate 可以直接传 Standard Schema（zod 风格），不合格重试并带 issue 信息', async () => {
@@ -313,6 +343,9 @@ d('ai.embed / ai.ocr', () => {
     const outOfRange = (async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [1, 0] }, { index: 7, embedding: [0, 1] }] }))) as unknown as typeof fetch
     cfg(outOfRange)
     await expect(ai.embedMany(['a', 'b'])).rejects.toMatchObject({ code: 'AI_EMPTY_EMBEDDING' })
+    const empty = (async () => new Response(JSON.stringify({ data: [{ index: 0, embedding: [] }] }))) as unknown as typeof fetch
+    cfg(empty)
+    await expect(ai.embed('a')).rejects.toMatchObject({ code: 'AI_EMPTY_EMBEDDING' })
   })
 
   it('ocr：POST {origin}/document-intelligence/analyze，base64 + 附加能力位掩码，解析 content/pages', async () => {

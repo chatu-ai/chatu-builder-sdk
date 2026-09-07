@@ -312,16 +312,18 @@ function jsonSchemaOf(schema: StandardSchemaV1): Record<string, unknown> | undef
 
 /**
  * 判断"这个中继/模型不认识 json_schema"，只有这种情况才值得降级重发。
- * 必须同时命中「提到 response_format/json_schema」和「不支持/无法识别」两类措辞——
- * 光看到 schema 字样就降级的话，`Invalid schema for response_format`（strict 模式下 schema 自己写错）
- * 会被误判成中继不支持：strict 静默失效、真正的错误被吞掉，还白白多计一次费。
+ * 做法是宽进 + 扣掉误判：拒绝的措辞各家不一（"Supported values are: 'text' and 'json_object'"、
+ * "response_format.type only support …"、pydantic 的 "Input should be 'text' or 'json_object'"），
+ * 列举"不支持"的说法必然漏；但**schema 自己写错**（strict 模式最常见）绝不能当成中继不支持——
+ * 那样 strict 静默失效、真正的错误被吞掉，还白白多计一次费。所以只把这一类明确排除掉。
  */
 function isResponseFormatRejected(err: unknown): boolean {
   if (!(err instanceof AppSdkError)) return false
   if (err.status !== 400 && err.status !== 422) return false
   const msg = err.message
-  if (!/response_format|json_schema/i.test(msg)) return false
-  return /not support|unsupported|unrecogni[sz]ed|unknown|not allowed|不支持|无法识别|未知/i.test(msg)
+  // schema 本身不合法：原样抛给调用方去改 schema
+  if (/invalid schema|additional propert|not permitted|additionalproperties/i.test(msg)) return false
+  return /response_format|json_schema|json_object/i.test(msg)
 }
 
 /** ai.json 的公共逻辑：约束提示 + response_format（json_schema → json_object 降级）+ 解析 + 校验 + 带错误重试 */
@@ -514,7 +516,8 @@ function platformAi(cfg: PlatformConfig): AiClient {
       const vectors: Array<number[] | undefined> = new Array<number[] | undefined>(texts.length).fill(undefined)
       data.forEach((d, i) => {
         const idx = typeof d?.index === 'number' ? d.index : i
-        if (idx >= 0 && idx < texts.length && Array.isArray(d?.embedding)) vectors[idx] = d.embedding
+        // 空数组也算没拿到：放过去会被当成合法向量写进库，之后永远检索不到
+        if (idx >= 0 && idx < texts.length && Array.isArray(d?.embedding) && d.embedding.length > 0) vectors[idx] = d.embedding
       })
       const missing = vectors.findIndex(v => v === undefined)
       if (missing >= 0) throw new AppSdkError('AI_EMPTY_EMBEDDING', `ai.embedMany: 第 ${String(missing)} 条文本没拿到向量（期望 ${String(texts.length)} 条，实际 ${String(data.length)} 条）`)
