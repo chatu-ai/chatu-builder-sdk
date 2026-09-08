@@ -71,6 +71,7 @@ Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by defaul
 | `CHATU_AI_URL` (optional) | explicit override of the AI base URL, e.g. `https://api.chatuapi.com/v1` |
 | `CHATU_AI_MODEL` / `PRIMARY_MODEL` (optional) | default model id when the caller does not pass `model`; the Builder sandbox sets `PRIMARY_MODEL`; if neither is set the server default is used |
 | `CHATU_AI_EMBED_MODEL` (optional) | default embedding model for `ai.embed` / `ai.embedMany`; defaults to `text-embedding-3-small` (allowed: `text-embedding-3-small` / `text-embedding-3-large` / `text-embedding-ada-002`) |
+| `CHATU_AI_IMAGE_AGENT` (optional) | default image agent for `ai.generateImage`; defaults to `Seedream4` (the cheapest) |
 
 ```ts
 // app/api/summarize/route.ts — one-shot
@@ -169,6 +170,25 @@ const { content, pages } = await ai.ocr(bytes, {          // Uint8Array | ArrayB
 ```
 
 Billed per page; add-ons are billed per page on top. Raw Azure Document Intelligence output stays in `.raw`.
+
+### Image generation
+
+```ts
+const { images } = await ai.generateImage({
+  prompt: 'a watercolor cat on a windowsill',
+  agent: 'Seedream4',            // optional; Seedream4 | Seedream5Lite | Seedream45 | Seedream5Pro | NanoBanana | NanoBananaPro | Image2
+  count: 1,                      // every image is billed
+  size: '2K',                    // '1K' | '2K' | '4K', '16:9', or '1024x1024' — mapped per agent family
+  referenceImages: ['https://…'],// image-to-image / style reference (not for Image2)
+})
+images[0].url                    // hosted URL — show it or store it with `storage`
+```
+
+Synchronous: the call waits for the agent (usually 5–60 s; multi-image high-quality runs can take 2–3 min), so call it
+from a Route Handler with a generous timeout and never from the client. **Billed per image** to the app owner
+(Seedream4 is the cheapest, NanoBanana / NanoBananaPro cost about twice as much); a failed run is not charged and
+throws `AppSdkError` (`AI_IMAGE_FAILED`, `AI_INSUFFICIENT_BALANCE`). Agent-specific knobs (`watermark`, `seed`,
+Image2 `quality`, …) go in `extra`. `ai.agents()` lists the agents the platform currently exposes to apps (image only for now).
 
 ## Rate limiting
 

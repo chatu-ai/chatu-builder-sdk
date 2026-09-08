@@ -36,11 +36,21 @@ curl -s http://localhost:3001/ | head -c 3000
 
 ### 3. 看 dev server 日志
 
+日志文件是**整个会话累积**的，直接 `tail` 很可能全是上一轮的内容。runtime 会在每轮开始时写一行
+`---- round <xid> start ----`，用它只取本轮：
+
 ```bash
-tail -n 80 /app/logs/builder-devserver.log
+tail -n 2000 /app/logs/builder-devserver.log \
+  | awk '/---- round .* start ----/{buf=""} {buf=buf $0 ORS} END{printf "%s", buf}' \
+  | tail -n 200
 ```
 
+前后两个 `tail` 都不能省：前面限制读入量，后面给输出封顶——本轮如果是第一轮、或沙箱还在跑旧 runtime
+（日志里没有标记），中间那段 `awk` 会把读到的全部内容原样吐出来。
+
 编译错误、Server Action 抛错、平台 API 报错（`KV_*` / `DB_*` / `AUTH_*` / `AI_*`）都在这里。按 `chatu-debug` 的对照表修。
+
+看到 `[runtime] --- 日志已轮转 ---` 说明更早的内容被挪到了 `builder-devserver.log.1` / `.2`，需要时去那里翻。
 
 ## 可选：看一眼实际渲染效果
 

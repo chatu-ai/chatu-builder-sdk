@@ -26,6 +26,8 @@ export interface PlatformConfig {
   aiModel?: string
   /** 默认 embedding 模型：CHATU_AI_EMBED_MODEL，缺省 text-embedding-3-small（服务端要求显式传 model） */
   aiEmbedModel: string
+  /** 默认生图 agent：CHATU_AI_IMAGE_AGENT；缺省由 ai.generateImage 用最便宜的 Seedream4 */
+  aiImageAgent?: string
   /**
    * auth.getSession() 的进程内缓存秒数（默认 30，0 关闭）。
    * 会话校验每个请求都会发生，缓存能显著减少计费的 auth 调用；代价是"停用用户"最多延迟这么久生效。
@@ -71,6 +73,8 @@ export interface ConfigureOptions {
   model?: string
   /** embedding 默认模型（缺省 text-embedding-3-small） */
   embedModel?: string
+  /** 生图默认 agent（缺省 Seedream4） */
+  imageAgent?: string
   /** auth.getSession() 进程内缓存秒数（默认 30，0 关闭） */
   authSessionCacheSeconds?: number
   /** 登录模式（默认 app；channel = 用渠道账号登录，不提供注册） */
@@ -149,6 +153,7 @@ export function resolveConfig(): ResolvedConfig {
       aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
       aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
       aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
+      aiImageAgent: override.imageAgent ?? env.CHATU_AI_IMAGE_AGENT,
       authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
       authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
     }
@@ -214,6 +219,7 @@ export function resolveAiConfig(): PlatformConfig | null {
     aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
     aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
     aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
+    aiImageAgent: override.imageAgent ?? env.CHATU_AI_IMAGE_AGENT,
     authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
     authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
   }

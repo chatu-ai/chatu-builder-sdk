@@ -7,7 +7,8 @@ import { isStandardSchema, validateWith, type StandardSchemaV1 } from './schema.
  * 用与 Data API 相同的应用密钥（sk-conv-…）鉴权，用量由平台按 api-key 计入应用所有者的 ChatU 点数。
  * 只在服务端使用（Route Handler / Server Action）；密钥不得暴露给浏览器。
  *
- * 同一套密钥还能用：`/embeddings`（向量）、`document-intelligence/analyze`（OCR / 文档解析）。
+ * 同一套密钥还能用：`/embeddings`（向量）、`document-intelligence/analyze`（OCR / 文档解析）、
+ * `/agents/{agent}/tasks`（平台智能体：当前开放图片生成，ai.generateImage）。
  */
 
 /** 多模态消息片段：文本或图片（图片用 https URL 或 `data:image/...;base64,...`，见 toDataUrl） */
@@ -138,6 +139,53 @@ export interface AiOcrResult {
   raw: any
 }
 
+/**
+ * 生图 agent。按张计费（点数因 agent 而异，Seedream4 最便宜、NanoBanana 系列约 2 倍），
+ * 平台白名单外的 agent 会 404。
+ */
+export type AiImageAgent = 'Seedream4' | 'Seedream5Lite' | 'Seedream45' | 'Seedream5Pro' | 'NanoBanana' | 'NanoBananaPro' | 'Image2' | (string & {})
+export interface AiImageOptions {
+  /** 生图提示词（中英文均可） */
+  prompt: string
+  /** 缺省 CHATU_AI_IMAGE_AGENT → Seedream4 */
+  agent?: AiImageAgent
+  /** 生成张数，默认 1；上限因 agent 而异（Seedream ≤15、NanoBanana ≤8、Image2 ≤4），每张都计费 */
+  count?: number
+  /**
+   * 尺寸/比例：'1K' | '2K' | '4K'（分辨率档）、'16:9'（比例）或 '1024x1024'（像素）。
+   * 各 agent 支持的写法不同，SDK 按 agent 家族映射到对应参数：Seedream 三种都收；NanoBanana 收档位（Pro）与比例；Image2 只收 1024x1024 / 1536x1024 / 1024x1536。
+   */
+  size?: string
+  /** 参考图 https URL（图生图 / 风格参考）；Image2 不支持 */
+  referenceImages?: string[]
+  /** 透传给 agent 的其它参数（如 Seedream 的 watermark / seed，Image2 的 quality），会覆盖 SDK 的映射 */
+  extra?: Record<string, unknown>
+  signal?: AbortSignal
+}
+export interface AiGeneratedImage {
+  /** 图片 URL（平台存储，可直接展示或下载） */
+  url: string
+  thumbnailUrl?: string
+  index: number
+  /** 实际尺寸（如 '2048x2048'），部分 agent 才有 */
+  size?: string
+  /** 模型随图返回的文字（NanoBanana 系列可能有） */
+  text?: string
+}
+export interface AiImageResult {
+  images: AiGeneratedImage[]
+  agent: string
+  /** 平台任务 id */
+  taskId?: string
+  /** 实际使用的模型版本 */
+  model?: string
+  /** agent 原样返回的 metadata / usage（各 agent 字段不一致，计费点数等看这里） */
+  metadata?: any
+  usage?: any
+}
+/** 应用可调用的平台智能体（ai.agents） */
+export interface AiAgentInfo { id: string; name?: string; description?: string; version?: string; iconUrl?: string; type?: string }
+
 export interface AiClient {
   /** 一次性对话，返回完整回复；content 可含图片片段（图片理解）；带 tools 时可能返回 toolCalls */
   chat(messages: AiMessage[] | string, opts?: AiChatOptions): Promise<AiChatResult>
@@ -161,6 +209,13 @@ export interface AiClient {
   ocr(file: Uint8Array | ArrayBuffer | Blob, opts: AiOcrOptions): Promise<AiOcrResult>
   /** 可用模型 id 列表 */
   models(): Promise<string[]>
+  /**
+   * 文生图 / 图生图：调用平台生图 agent，同步等待（通常 5~60 秒，多图高质量可到 2~3 分钟），返回图片 URL 列表。
+   * 按张计费到应用所有者；失败（含余额不足）抛 AppSdkError。
+   */
+  generateImage(opts: AiImageOptions): Promise<AiImageResult>
+  /** 应用可调用的平台智能体列表（当前只开放图片类） */
+  agents(): Promise<AiAgentInfo[]>
 }
 
 const toMessages = (input: AiMessage[] | string): AiMessage[] => (typeof input === 'string' ? [{ role: 'user', content: input }] : input)
@@ -441,6 +496,81 @@ function parseOcrResult(raw: any): AiOcrResult {
   return { content, pages, raw }
 }
 
+/** 生图缺省 agent：白名单里最便宜的一档 */
+export const DEFAULT_IMAGE_AGENT = 'Seedream4'
+
+/** 'WxH' → 约分后的 'W:H'（NanoBanana 只收比例） */
+function toAspectRatio(size: string): string | undefined {
+  const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(size)
+  if (!m) return /^\d+:\d+$/.test(size) ? size : undefined
+  let a = Number(m[1]), b = Number(m[2])
+  if (!a || !b) return undefined
+  const gcd = (x: number, y: number): number => (y ? gcd(y, x % y) : x)
+  const g = gcd(a, b)
+  a /= g; b /= g
+  return `${String(a)}:${String(b)}`
+}
+
+/**
+ * SDK 统一选项 → 各 agent 家族的入参。字段名以服务端 agent 的输入模型为准（camelCase，服务端大小写不敏感）：
+ * - Seedream*：prompt / size / maxImages / referenceImageUrls
+ * - NanoBanana*：prompt / count / aspectRatio / imageSize(Pro) / referenceImageUrls
+ * - Image2：prompt / count / size
+ * 未知 agent 按 Seedream 口径组装；opts.extra 最后合并、可覆盖任何字段。
+ */
+export function buildImageInput(agent: string, opts: AiImageOptions): Record<string, unknown> {
+  const input: Record<string, unknown> = { prompt: opts.prompt }
+  const count = opts.count ?? 1
+  const size = opts.size?.trim()
+  const refs = opts.referenceImages?.filter(Boolean)
+  const family = /^nanobanana/i.test(agent) ? 'nanobanana' : /^image2$/i.test(agent) ? 'image2' : 'seedream'
+  if (family === 'nanobanana') {
+    input.count = count
+    if (size) {
+      if (/^\d+K$/i.test(size)) input.imageSize = size.toUpperCase()
+      else { const r = toAspectRatio(size); if (r) input.aspectRatio = r }
+    }
+    if (refs?.length) input.referenceImageUrls = refs
+  } else if (family === 'image2') {
+    input.count = count
+    if (size) input.size = size
+  } else {
+    input.maxImages = count
+    if (size) input.size = size
+    if (refs?.length) input.referenceImageUrls = refs
+  }
+  return { ...input, ...(opts.extra ?? {}) }
+}
+
+/** /v1/agents 任务响应 → AiImageResult；非完成态或无图抛错 */
+export function parseImageTask(agent: string, task: any): AiImageResult {
+  const state = typeof task?.state === 'string' ? task.state : 'unknown'
+  const out = task?.output
+  if (state !== 'completed') {
+    const msg = typeof task?.error === 'string' && task.error ? task.error : `ai.generateImage: agent 任务未完成（state=${state}）`
+    const code = /insufficient balance|余额不足/i.test(msg) ? 'AI_INSUFFICIENT_BALANCE' : 'AI_IMAGE_FAILED'
+    throw new AppSdkError(code, msg, code === 'AI_INSUFFICIENT_BALANCE' ? 402 : undefined)
+  }
+  const list: any[] = Array.isArray(out?.images) ? out.images : []
+  const images: AiGeneratedImage[] = list
+    .map((im, i) => {
+      const url = typeof im?.imageUrl === 'string' ? im.imageUrl : typeof im?.url === 'string' ? im.url : ''
+      const img: AiGeneratedImage = { url, index: typeof im?.index === 'number' ? im.index : i }
+      if (typeof im?.thumbnailUrl === 'string' && im.thumbnailUrl) img.thumbnailUrl = im.thumbnailUrl
+      if (typeof im?.size === 'string' && im.size) img.size = im.size
+      if (typeof im?.generatedText === 'string' && im.generatedText) img.text = im.generatedText
+      return img
+    })
+    .filter(im => im.url)
+  if (images.length === 0) throw new AppSdkError('AI_IMAGE_EMPTY', 'ai.generateImage: agent 返回成功但没有图片')
+  const result: AiImageResult = { images, agent }
+  if (typeof task?.id === 'string') result.taskId = task.id
+  if (typeof out?.modelVersion === 'string') result.model = out.modelVersion
+  if (out?.metadata !== undefined) result.metadata = out.metadata
+  if (out?.usage !== undefined) result.usage = out.usage
+  return result
+}
+
 // ---------- platform driver ----------
 function platformAi(cfg: PlatformConfig): AiClient {
   const headers = { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json' }
@@ -540,6 +670,22 @@ function platformAi(cfg: PlatformConfig): AiClient {
       const list: any[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : []
       return list.map(m => (typeof m === 'string' ? m : m?.id)).filter((id): id is string => typeof id === 'string')
     },
+    async generateImage(opts) {
+      if (!opts?.prompt?.trim()) throw new AppSdkError('AI_IMAGE_PROMPT_REQUIRED', 'ai.generateImage: prompt 不能为空')
+      const agent = opts.agent ?? cfg.aiImageAgent ?? DEFAULT_IMAGE_AGENT
+      const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/agents/${encodeURIComponent(agent)}/tasks`, {
+        method: 'POST', headers, body: JSON.stringify({ input: buildImageInput(agent, opts) }), signal: opts.signal,
+      })
+      if (!res.ok) await throwHttpError(res, 'ai.generateImage')
+      return parseImageTask(agent, await res.json())
+    },
+    async agents() {
+      const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/agents`, { method: 'GET', headers: { authorization: headers.authorization } })
+      if (!res.ok) await throwHttpError(res, 'ai.agents')
+      const json: any = await res.json()
+      const list: any[] = Array.isArray(json?.data) ? json.data : []
+      return list.filter(a => typeof a?.id === 'string').map(a => ({ id: a.id, name: a.name ?? undefined, description: a.description ?? undefined, version: a.version ?? undefined, iconUrl: a.iconUrl ?? undefined, type: a.type ?? undefined }))
+    },
   }
 }
 
@@ -556,6 +702,8 @@ function notConfigured(): AiClient {
     embedMany: async () => fail(),
     ocr: async () => fail(),
     models: async () => fail(),
+    generateImage: async () => fail(),
+    agents: async () => fail(),
   }
 }
 
@@ -564,7 +712,7 @@ let cached: { key: string; fetchImpl?: typeof fetch; client: AiClient } | null =
 /** 按当前配置取 AI 客户端（惰性、缓存；configure() 后自动重建） */
 export function getAi(): AiClient {
   const cfg = resolveAiConfig()
-  const key = cfg ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.aiEmbedModel}|${cfg.apiKey.slice(-4)}` : 'none'
+  const key = cfg ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.aiEmbedModel}|${cfg.aiImageAgent ?? ''}|${cfg.apiKey.slice(-4)}` : 'none'
   const fetchImpl = cfg?.fetchImpl
   if (!cached || cached.key !== key || cached.fetchImpl !== fetchImpl) cached = { key, fetchImpl, client: cfg ? platformAi(cfg) : notConfigured() }
   return cached.client
@@ -580,4 +728,6 @@ export const ai: AiClient = {
   embedMany: (t, o) => getAi().embedMany(t, o),
   ocr: (f, o) => getAi().ocr(f, o),
   models: () => getAi().models(),
+  generateImage: o => getAi().generateImage(o),
+  agents: () => getAi().agents(),
 }

@@ -1,5 +1,5 @@
 import { describe as d, expect, it } from 'vitest'
-import { ai, configure, getAi, toDataUrl } from './index'
+import { ai, buildImageInput, configure, getAi, parseImageTask, toDataUrl } from './index'
 import { deriveAiBaseUrl } from './config'
 
 const sse = (lines: string[]) => new ReadableStream<Uint8Array>({
@@ -368,5 +368,66 @@ d('ai.embed / ai.ocr', () => {
     const fetchImpl = (async () => new Response('Insufficient balance.', { status: 400 })) as unknown as typeof fetch
     cfg(fetchImpl)
     await expect(ai.ocr(new Blob([new Uint8Array([1])]), { filename: 'x.png' })).rejects.toMatchObject({ code: 'HTTP_400', message: 'Insufficient balance.', status: 400 })
+  })
+
+  it('generateImage：POST /v1/agents/{agent}/tasks，默认 Seedream4 且 count→maxImages，解析 images[].imageUrl', async () => {
+    let seen: { url: string; body: any; headers: Record<string, string> } | undefined
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen = { url, body: JSON.parse(String(init.body)), headers: init.headers as Record<string, string> }
+      return new Response(JSON.stringify({
+        id: 't1', agent: 'Seedream4', state: 'completed', error: null,
+        output: { images: [{ imageUrl: 'https://cdn/1.jpg', thumbnailUrl: 'https://cdn/1_t.jpg', index: 0, size: '2048x2048', markdown: '![](x)' }], modelVersion: 'seedream-4-0', metadata: { credits: 10000 }, usage: { images: 1 } },
+      }))
+    }) as unknown as typeof fetch
+    cfg(fetchImpl)
+    const r = await ai.generateImage({ prompt: '一只猫', size: '2K', referenceImages: ['https://x/ref.png'], extra: { watermark: false } })
+    expect(seen!.url).toBe('https://api.test/v1/agents/Seedream4/tasks')
+    expect(seen!.headers.authorization).toBe('Bearer sk-conv-abc')
+    expect(seen!.body).toEqual({ input: { prompt: '一只猫', maxImages: 1, size: '2K', referenceImageUrls: ['https://x/ref.png'], watermark: false } })
+    expect(r).toEqual({
+      images: [{ url: 'https://cdn/1.jpg', thumbnailUrl: 'https://cdn/1_t.jpg', index: 0, size: '2048x2048' }],
+      agent: 'Seedream4', taskId: 't1', model: 'seedream-4-0', metadata: { credits: 10000 }, usage: { images: 1 },
+    })
+  })
+
+  it('generateImage：agent 可由 configure({ imageAgent }) 指定；NanoBanana 家族 count/aspectRatio/imageSize', async () => {
+    let seen: { url: string; body: any } | undefined
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen = { url, body: JSON.parse(String(init.body)) }
+      return new Response(JSON.stringify({ id: 't2', state: 'completed', output: { images: [{ imageUrl: 'https://cdn/a.png', generatedText: 'ok' }] } }))
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', imageAgent: 'NanoBananaPro', fetchImpl })
+    const r = await ai.generateImage({ prompt: 'p', count: 2, size: '1024x768' })
+    expect(seen!.url).toBe('https://api.test/v1/agents/NanoBananaPro/tasks')
+    expect(seen!.body).toEqual({ input: { prompt: 'p', count: 2, aspectRatio: '4:3' } })
+    expect(r.images).toEqual([{ url: 'https://cdn/a.png', index: 0, text: 'ok' }])
+    expect(r.agent).toBe('NanoBananaPro')
+  })
+
+  it('buildImageInput：各家族参数映射', () => {
+    expect(buildImageInput('NanoBanana', { prompt: 'p', size: '16:9', referenceImages: ['u'] })).toEqual({ prompt: 'p', count: 1, aspectRatio: '16:9', referenceImageUrls: ['u'] })
+    expect(buildImageInput('NanoBananaPro', { prompt: 'p', size: '4k' })).toEqual({ prompt: 'p', count: 1, imageSize: '4K' })
+    expect(buildImageInput('Image2', { prompt: 'p', count: 3, size: '1536x1024', referenceImages: ['ignored'], extra: { quality: 'high' } })).toEqual({ prompt: 'p', count: 3, size: '1536x1024', quality: 'high' })
+    expect(buildImageInput('Seedream5Pro', { prompt: 'p', count: 4 })).toEqual({ prompt: 'p', maxImages: 4 })
+  })
+
+  it('generateImage：失败态抛 AI_IMAGE_FAILED；余额不足映射 AI_INSUFFICIENT_BALANCE(402)；空 prompt 不发请求', async () => {
+    expect(() => parseImageTask('Seedream4', { state: 'failed', error: 'boom' })).toThrowError(expect.objectContaining({ code: 'AI_IMAGE_FAILED', message: 'boom' }))
+    expect(() => parseImageTask('Seedream4', { state: 'failed', error: 'Insufficient balance' })).toThrowError(expect.objectContaining({ code: 'AI_INSUFFICIENT_BALANCE', status: 402 }))
+    expect(() => parseImageTask('Seedream4', { state: 'completed', output: { images: [] } })).toThrowError(expect.objectContaining({ code: 'AI_IMAGE_EMPTY' }))
+    let called = 0
+    cfg((async () => { called++; return new Response('{}') }) as unknown as typeof fetch)
+    await expect(ai.generateImage({ prompt: '  ' })).rejects.toMatchObject({ code: 'AI_IMAGE_PROMPT_REQUIRED' })
+    expect(called).toBe(0)
+    // 服务端 OpenAI 风格错误（如 403 非 Builder Key）→ AppSdkError(code, status)
+    cfg((async () => new Response(JSON.stringify({ error: { message: 'Agents API is only available to Builder app keys.', type: 'permission_error', code: 'app_key_required' } }), { status: 403 })) as unknown as typeof fetch)
+    await expect(ai.generateImage({ prompt: 'p' })).rejects.toMatchObject({ code: 'app_key_required', status: 403 })
+  })
+
+  it('agents：GET /v1/agents，解析 data[]', async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ data: [{ id: 'Seedream4', name: 'Seedream 4', type: 'image', description: null }, { id: 'Image2', name: 'GPT Image', type: 'image' }] }))) as unknown as typeof fetch
+    cfg(fetchImpl)
+    const list = await ai.agents()
+    expect(list).toEqual([{ id: 'Seedream4', name: 'Seedream 4', type: 'image', description: undefined, version: undefined, iconUrl: undefined }, { id: 'Image2', name: 'GPT Image', type: 'image', description: undefined, version: undefined, iconUrl: undefined }])
   })
 })
