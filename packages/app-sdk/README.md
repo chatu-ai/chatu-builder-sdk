@@ -72,6 +72,7 @@ Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by defaul
 | `CHATU_AI_MODEL` / `PRIMARY_MODEL` (optional) | default model id when the caller does not pass `model`; the Builder sandbox sets `PRIMARY_MODEL`; if neither is set the server default is used |
 | `CHATU_AI_EMBED_MODEL` (optional) | default embedding model for `ai.embed` / `ai.embedMany`; defaults to `text-embedding-3-small` (allowed: `text-embedding-3-small` / `text-embedding-3-large` / `text-embedding-ada-002`) |
 | `CHATU_AI_IMAGE_AGENT` (optional) | default image agent for `ai.generateImage`; defaults to `Seedream4` (the cheapest) |
+| `CHATU_AI_VIDEO_AGENT` (optional) | default video agent for `ai.generateVideo`; defaults to `Seedance2Fast` (the cheapest / fastest) |
 
 ```ts
 // app/api/summarize/route.ts — one-shot
@@ -188,7 +189,37 @@ Synchronous: the call waits for the agent (usually 5–60 s; multi-image high-qu
 from a Route Handler with a generous timeout and never from the client. **Billed per image** to the app owner
 (Seedream4 is the cheapest, NanoBanana / NanoBananaPro cost about twice as much); a failed run is not charged and
 throws `AppSdkError` (`AI_IMAGE_FAILED`, `AI_INSUFFICIENT_BALANCE`). Agent-specific knobs (`watermark`, `seed`,
-Image2 `quality`, …) go in `extra`. `ai.agents()` lists the agents the platform currently exposes to apps (image only for now).
+Image2 `quality`, …) go in `extra`. `ai.agents()` lists the agents the platform currently exposes to apps
+(`mode: 'sync'` for image agents, `'async'` for video agents).
+
+### Video generation
+
+```ts
+// simplest: submit and poll until done (usually 1–5 min)
+const { video, thumbnailUrl, totalCredits } = await ai.generateVideo({
+  prompt: 'a paper boat drifting down a rainy street, cinematic',
+  agent: 'Seedance2Fast',        // optional; Seedance2Fast | Seedance2Mini | Seedance2 | Seedance25 | Seedance15 | Sora2 | MiniMaxH3
+  duration: 5,                   // seconds — Seedance 2.x: 5 | 10, Seedance25: 4–30, MiniMaxH3: 4–15, Sora2: 4 | 8 | 12
+  ratio: '16:9',                 // '16:9' | '9:16' | '1:1' (Seedance25 / MiniMaxH3 also 4:3, 3:4, 21:9, adaptive)
+  resolution: '720p',            // '480p' | '720p' (Seedance25 up to 1080p; MiniMaxH3: '768P' | '2K'); ignored by Sora2
+  firstFrameUrl: 'https://…',    // image-to-video (not for Sora2); add lastFrameUrl for first+last, referenceImages for multimodal
+  onProgress: t => console.log(t.state, t.message),
+})
+video.url                        // hosted mp4
+
+// serverless routes with a short execution limit: submit now, poll later
+const task = await ai.generateVideo({ prompt, wait: false })   // → { taskId, agent, state }
+const snap = await ai.getTask(task.agent, task.taskId)         // { state: 'working', message: '排队中…' } | { state: 'completed', output }
+const done = await ai.waitForTask(task.agent, task.taskId, { pollIntervalMs: 5000, timeoutMs: 15 * 60_000 })
+```
+
+Video agents are **asynchronous only** on the platform: the POST returns a task id at once and the SDK polls
+`GET /v1/agents/{agent}/tasks/{id}` every 5 s (up to 15 min; `AI_VIDEO_TIMEOUT` afterwards — the task keeps running
+server-side, query it again later). **Billed per second × resolution** to the app owner and *expensive* — a 5 s 720p
+clip is roughly 100k–400k points (about ¥2–8), Sora2 / MiniMaxH3 2K more — so confirm with the user before wiring it
+into anything that runs unattended. Failures throw `AppSdkError` (`AI_VIDEO_FAILED`, `AI_INSUFFICIENT_BALANCE`,
+`AI_VIDEO_EMPTY`); the state before failure is not charged. Agent-specific knobs (`seed`, `watermark`, `cameraFixed`,
+MiniMaxH3 `referenceVideoUrls`, …) go in `extra`.
 
 ## Rate limiting
 

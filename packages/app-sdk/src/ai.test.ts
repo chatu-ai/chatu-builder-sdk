@@ -1,5 +1,5 @@
 import { describe as d, expect, it } from 'vitest'
-import { ai, buildImageInput, configure, getAi, parseImageTask, toDataUrl } from './index'
+import { ai, buildImageInput, buildVideoInput, configure, getAi, parseImageTask, parseVideoTask, toDataUrl } from './index'
 import { deriveAiBaseUrl } from './config'
 
 const sse = (lines: string[]) => new ReadableStream<Uint8Array>({
@@ -428,6 +428,67 @@ d('ai.embed / ai.ocr', () => {
     const fetchImpl = (async () => new Response(JSON.stringify({ data: [{ id: 'Seedream4', name: 'Seedream 4', type: 'image', description: null }, { id: 'Image2', name: 'GPT Image', type: 'image' }] }))) as unknown as typeof fetch
     cfg(fetchImpl)
     const list = await ai.agents()
-    expect(list).toEqual([{ id: 'Seedream4', name: 'Seedream 4', type: 'image', description: undefined, version: undefined, iconUrl: undefined }, { id: 'Image2', name: 'GPT Image', type: 'image', description: undefined, version: undefined, iconUrl: undefined }])
+    expect(list).toEqual([{ id: 'Seedream4', name: 'Seedream 4', type: 'image', description: undefined, version: undefined, iconUrl: undefined, mode: 'sync' }, { id: 'Image2', name: 'GPT Image', type: 'image', description: undefined, version: undefined, iconUrl: undefined, mode: 'sync' }])
+  })
+
+  it('generateVideo：POST {input, wait:false} 拿 taskId，再 GET tasks/{id} 轮询到 completed；onProgress 收到每次快照', async () => {
+    const calls: Array<{ method: string; url: string; body?: any }> = []
+    const polls = [
+      { id: 'v1', agent: 'Seedance2Fast', state: 'working', message: '排队中...（1/90）' },
+      { id: 'v1', agent: 'Seedance2Fast', state: 'working', message: '生成中...' },
+      { id: 'v1', agent: 'Seedance2Fast', state: 'completed', output: { video: { url: 'https://cdn/v.mp4', name: 'generated_video.mp4', size: 123, type: 'video/mp4' }, lastFrameImage: { url: 'https://cdn/last.png' }, totalCredits: 199800, metadata: { model: 'seedance-2.0-fast', duration: 5 } } },
+    ]
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const method = init.method ?? 'GET'
+      calls.push({ method, url, body: init.body ? JSON.parse(String(init.body)) : undefined })
+      if (method === 'POST') return new Response(JSON.stringify({ id: 'v1', agent: 'Seedance2Fast', state: 'submitted', message: '任务已接收' }))
+      return new Response(JSON.stringify(polls.shift()))
+    }) as unknown as typeof fetch
+    cfg(fetchImpl)
+    const seen: string[] = []
+    const r = await ai.generateVideo({ prompt: '海边日落', duration: 5, ratio: '16:9', resolution: '720p', pollIntervalMs: 1, onProgress: t => seen.push(`${t.state}:${t.message ?? ''}`) })
+    expect(calls[0]).toEqual({ method: 'POST', url: 'https://api.test/v1/agents/Seedance2Fast/tasks', body: { input: { prompt: '海边日落', mode: 't2v', ratio: '16:9', resolution: '720p', duration: 5 }, wait: false } })
+    expect(calls.slice(1).every(c => c.method === 'GET' && c.url === 'https://api.test/v1/agents/Seedance2Fast/tasks/v1')).toBe(true)
+    expect(calls).toHaveLength(4)
+    expect(seen).toEqual(['submitted:任务已接收', 'working:排队中...（1/90）', 'working:生成中...', 'completed:'])
+    expect(r).toEqual({
+      video: { url: 'https://cdn/v.mp4', name: 'generated_video.mp4', size: 123, type: 'video/mp4' },
+      thumbnailUrl: 'https://cdn/last.png', agent: 'Seedance2Fast', taskId: 'v1', totalCredits: 199800, metadata: { model: 'seedance-2.0-fast', duration: 5 },
+    })
+  })
+
+  it('generateVideo：wait:false 只提交，返回任务句柄；getTask / waitForTask 可单独用；超时抛 AI_VIDEO_TIMEOUT', async () => {
+    let gets = 0
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      if ((init.method ?? 'GET') === 'POST') return new Response(JSON.stringify({ id: 'v2', agent: 'Sora2', state: 'working', message: 'queued' }))
+      gets++
+      return new Response(JSON.stringify({ id: 'v2', agent: 'Sora2', state: 'working', message: `p${String(gets)}` }))
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', videoAgent: 'Sora2', fetchImpl })
+    const handle = await ai.generateVideo({ prompt: 'p', wait: false })
+    expect(handle).toEqual({ taskId: 'v2', agent: 'Sora2', state: 'working', message: 'queued' })
+    expect(gets).toBe(0)
+    expect(await ai.getTask('Sora2', 'v2')).toEqual({ id: 'v2', agent: 'Sora2', state: 'working', message: 'p1' })
+    await expect(ai.waitForTask('Sora2', 'v2', { pollIntervalMs: 1, timeoutMs: 5 })).rejects.toMatchObject({ code: 'AI_VIDEO_TIMEOUT' })
+  })
+
+  it('generateVideo：提交即失败（余额不足）不轮询，直接抛 AI_INSUFFICIENT_BALANCE(402)；空 prompt 不发请求', async () => {
+    let calls = 0
+    cfg((async () => { calls++; return new Response(JSON.stringify({ id: 'v3', state: 'failed', error: 'Insufficient balance' })) }) as unknown as typeof fetch)
+    await expect(ai.generateVideo({ prompt: 'p' })).rejects.toMatchObject({ code: 'AI_INSUFFICIENT_BALANCE', status: 402 })
+    expect(calls).toBe(1)
+    await expect(ai.generateVideo({ prompt: ' ' })).rejects.toMatchObject({ code: 'AI_VIDEO_PROMPT_REQUIRED' })
+    expect(calls).toBe(1)
+    expect(() => parseVideoTask('Seedance2Fast', { id: 'x', state: 'failed', error: 'boom' })).toThrowError(expect.objectContaining({ code: 'AI_VIDEO_FAILED', message: 'boom' }))
+    expect(() => parseVideoTask('Seedance2Fast', { id: 'x', state: 'completed', output: { totalCredits: 1 } })).toThrowError(expect.objectContaining({ code: 'AI_VIDEO_EMPTY' }))
+  })
+
+  it('buildVideoInput：Seedance 由首尾帧/参考图推 mode；MiniMaxH3 firstFrameUrl/大写分辨率；Sora2 size/seconds', () => {
+    expect(buildVideoInput('Seedance2Fast', { prompt: 'p', firstFrameUrl: 'a' })).toEqual({ prompt: 'p', mode: 'i2v-first', imageUrl: 'a' })
+    expect(buildVideoInput('Seedance25', { prompt: 'p', firstFrameUrl: 'a', lastFrameUrl: 'b', generateAudio: false, extra: { seed: 7 } })).toEqual({ prompt: 'p', mode: 'i2v-both', imageUrl: 'a', lastFrameUrl: 'b', generateAudio: false, seed: 7 })
+    expect(buildVideoInput('Seedance2', { prompt: 'p', referenceImages: ['r1', 'r2'], resolution: '1080P' })).toEqual({ prompt: 'p', mode: 'multimodal', referenceImageUrls: ['r1', 'r2'], resolution: '1080p' })
+    expect(buildVideoInput('MiniMaxH3', { prompt: 'p', firstFrameUrl: 'a', lastFrameUrl: 'b', ratio: 'adaptive', resolution: '2k', duration: 6 })).toEqual({ prompt: 'p', firstFrameUrl: 'a', lastFrameUrl: 'b', ratio: 'adaptive', resolution: '2K', duration: 6 })
+    expect(buildVideoInput('Sora2', { prompt: 'p' })).toEqual({ prompt: 'p', size: '1280x720', seconds: '4' })
+    expect(buildVideoInput('Sora2', { prompt: 'p', ratio: '9:16', duration: 10, firstFrameUrl: 'ignored' })).toEqual({ prompt: 'p', size: '720x1280', seconds: '8' })
   })
 })

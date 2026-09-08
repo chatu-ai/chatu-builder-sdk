@@ -10,12 +10,13 @@ export type { StorageClient, StorageObject, StorageListResult, UploadUrlResult }
 export { auth, getAuth } from './auth.js'
 export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch } from './auth.js'
 export { ai, getAi } from './ai.js'
-export { extractJson, toDataUrl, buildImageInput, parseImageTask, DEFAULT_IMAGE_AGENT } from './ai.js'
+export { extractJson, toDataUrl, buildImageInput, parseImageTask, DEFAULT_IMAGE_AGENT, buildVideoInput, parseVideoTask, parseAgentTask, isTerminalTaskState, DEFAULT_VIDEO_AGENT } from './ai.js'
 export type {
   AiClient, AiMessage, AiContentPart, AiChatOptions, AiChatResult, AiJsonOptions, AiUsage,
   AiTool, AiToolCall, AiRunToolsOptions, AiRunToolsResult, AiStream, AiStreamOptions,
   AiEmbedOptions, AiEmbedManyResult, AiOcrOptions, AiOcrResult, AiOcrPage, AiOcrFeature,
   AiImageAgent, AiImageOptions, AiImageResult, AiGeneratedImage, AiAgentInfo,
+  AiVideoAgent, AiVideoOptions, AiVideoResult, AiVideoTask, AiAgentTask,
 } from './ai.js'
 export { ratelimit } from './ratelimit.js'
 export type { RatelimitOptions, RatelimitResult } from './ratelimit.js'

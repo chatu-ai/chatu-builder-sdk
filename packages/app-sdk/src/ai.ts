@@ -8,7 +8,7 @@ import { isStandardSchema, validateWith, type StandardSchemaV1 } from './schema.
  * 只在服务端使用（Route Handler / Server Action）；密钥不得暴露给浏览器。
  *
  * 同一套密钥还能用：`/embeddings`（向量）、`document-intelligence/analyze`（OCR / 文档解析）、
- * `/agents/{agent}/tasks`（平台智能体：当前开放图片生成，ai.generateImage）。
+ * `/agents/{agent}/tasks`（平台智能体：图片生成 ai.generateImage 同步；视频生成 ai.generateVideo 异步提交 + GET tasks/{id} 轮询）。
  */
 
 /** 多模态消息片段：文本或图片（图片用 https URL 或 `data:image/...;base64,...`，见 toDataUrl） */
@@ -183,8 +183,73 @@ export interface AiImageResult {
   metadata?: any
   usage?: any
 }
-/** 应用可调用的平台智能体（ai.agents） */
-export interface AiAgentInfo { id: string; name?: string; description?: string; version?: string; iconUrl?: string; type?: string }
+/**
+ * 视频 agent。按秒 × 分辨率计费、非常贵（一条 5 秒 720p 视频约 10~40 万点，即 2~8 元），
+ * 平台只开放异步：提交后拿 taskId 轮询，白名单外的 agent 会 404。
+ */
+export type AiVideoAgent = 'Seedance2Fast' | 'Seedance2Mini' | 'Seedance2' | 'Seedance25' | 'Seedance15' | 'Sora2' | 'MiniMaxH3' | (string & {})
+export interface AiVideoOptions {
+  /** 视频描述提示词（中英文均可） */
+  prompt: string
+  /** 缺省 CHATU_AI_VIDEO_AGENT → Seedance2Fast */
+  agent?: AiVideoAgent
+  /** 时长（秒）。Seedance 2 系列 5|10、Seedance25 4~30、MiniMaxH3 4~15、Sora2 4|8|12；缺省 5（Sora2 4） */
+  duration?: number
+  /** 画幅比例 '16:9' | '9:16' | '1:1'（Seedance25 / MiniMaxH3 另支持 4:3 3:4 21:9 adaptive）；Sora2 只分横竖屏 */
+  ratio?: string
+  /** 分辨率 '480p' | '720p'（Seedance25 到 1080p；MiniMaxH3 为 '768P' | '2K'）；Sora2 不收 */
+  resolution?: string
+  /** 首帧图 https URL（图生视频）；Sora2 不支持 */
+  firstFrameUrl?: string
+  /** 尾帧图 https URL（需同时给首帧）；Sora2 不支持 */
+  lastFrameUrl?: string
+  /** 参考图 https URL 列表（多模态参考）；Sora2 不支持 */
+  referenceImages?: string[]
+  /** 是否生成音频（Seedance 系列，默认 true） */
+  generateAudio?: boolean
+  /** 透传给 agent 的其它参数（如 Seedance 的 seed / watermark / cameraFixed、MiniMaxH3 的 referenceVideoUrls），会覆盖 SDK 的映射 */
+  extra?: Record<string, unknown>
+  /**
+   * 默认 true：SDK 轮询到终态再返回 AiVideoResult（通常 1~5 分钟）。
+   * false：提交后立刻返回 AiVideoTask（taskId），由应用自己用 ai.getTask / ai.waitForTask 查——适合 serverless 路由有执行时限的场景。
+   */
+  wait?: boolean
+  /** 轮询间隔毫秒，默认 5000 */
+  pollIntervalMs?: number
+  /** 轮询总超时毫秒，默认 15 分钟；超时抛 AI_VIDEO_TIMEOUT（任务本身仍在服务端继续） */
+  timeoutMs?: number
+  /** 每次轮询回调（state + 服务端进度文案，如"排队中..."） */
+  onProgress?: (task: AiAgentTask) => void
+  signal?: AbortSignal
+}
+/** 平台 agent 任务（异步模式）的通用快照：/v1/agents/{agent}/tasks/{id} */
+export interface AiAgentTask {
+  id: string
+  agent: string
+  /** submitted | working | completed | failed | canceled | unknown */
+  state: string
+  /** 非终态时服务端给的进度文案 */
+  message?: string
+  /** 完成态：agent 原样输出（视频类为 { video: {url,...}, totalCredits, metadata }） */
+  output?: any
+  /** 失败态：错误原因 */
+  error?: string
+}
+/** ai.generateVideo({ wait:false }) 返回的任务句柄 */
+export interface AiVideoTask { taskId: string; agent: string; state: string; message?: string }
+export interface AiVideoResult {
+  video: { url: string; name?: string; size?: number; type?: string }
+  /** 尾帧图（Seedance）或封面图（Sora2）URL，部分 agent 才有 */
+  thumbnailUrl?: string
+  agent: string
+  taskId: string
+  /** 本次实际扣费点数 */
+  totalCredits?: number
+  /** agent 原样返回的 metadata（模型、分辨率、时长、上游任务 id 等） */
+  metadata?: any
+}
+/** 应用可调用的平台智能体（ai.agents）；mode=async 的只能异步（提交后轮询） */
+export interface AiAgentInfo { id: string; name?: string; description?: string; version?: string; iconUrl?: string; type?: string; mode?: 'sync' | 'async' }
 
 export interface AiClient {
   /** 一次性对话，返回完整回复；content 可含图片片段（图片理解）；带 tools 时可能返回 toolCalls */
@@ -214,7 +279,17 @@ export interface AiClient {
    * 按张计费到应用所有者；失败（含余额不足）抛 AppSdkError。
    */
   generateImage(opts: AiImageOptions): Promise<AiImageResult>
-  /** 应用可调用的平台智能体列表（当前只开放图片类） */
+  /**
+   * 文生视频 / 图生视频：提交到平台视频 agent（异步），默认轮询到完成（通常 1~5 分钟）返回视频 URL；
+   * wait:false 则立刻返回 taskId，再用 getTask / waitForTask 查。按秒计费到应用所有者、单价很高，务必先向用户确认。
+   */
+  generateVideo(opts: AiVideoOptions & { wait: false }): Promise<AiVideoTask>
+  generateVideo(opts: AiVideoOptions): Promise<AiVideoResult>
+  /** 查询一个 agent 任务的当前状态（不阻塞） */
+  getTask(agent: string, taskId: string): Promise<AiAgentTask>
+  /** 轮询一个 agent 任务直到终态；完成返回快照，失败 / 超时抛 AppSdkError */
+  waitForTask(agent: string, taskId: string, opts?: { pollIntervalMs?: number; timeoutMs?: number; onProgress?: (task: AiAgentTask) => void; signal?: AbortSignal }): Promise<AiAgentTask>
+  /** 应用可调用的平台智能体列表（图片类 mode=sync，视频类 mode=async） */
   agents(): Promise<AiAgentInfo[]>
 }
 
@@ -571,6 +646,101 @@ export function parseImageTask(agent: string, task: any): AiImageResult {
   return result
 }
 
+/** 视频缺省 agent：白名单里最便宜、最快的一档（480p/720p，5|10 秒） */
+export const DEFAULT_VIDEO_AGENT = 'Seedance2Fast'
+/** 视频轮询默认：5 秒一次，最长 15 分钟 */
+export const VIDEO_POLL_INTERVAL_MS = 5_000
+export const VIDEO_POLL_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * SDK 统一选项 → 各视频 agent 家族的入参。字段名以服务端 agent 的输入模型为准（camelCase）：
+ * - Seedance*：prompt / mode(t2v|i2v-first|i2v-both|multimodal) / imageUrl / lastFrameUrl / referenceImageUrls / ratio / resolution / duration / generateAudio
+ * - MiniMaxH3：prompt / firstFrameUrl / lastFrameUrl / referenceImageUrls / ratio / resolution / duration
+ * - Sora2：prompt / size(1280x720|720x1280，由 ratio 推) / seconds("4"|"8"|"12" 字符串)
+ * 未知 agent 按 Seedance 口径组装；opts.extra 最后合并、可覆盖任何字段。
+ */
+export function buildVideoInput(agent: string, opts: AiVideoOptions): Record<string, unknown> {
+  const input: Record<string, unknown> = { prompt: opts.prompt }
+  const refs = opts.referenceImages?.filter(Boolean)
+  const first = opts.firstFrameUrl?.trim()
+  const last = opts.lastFrameUrl?.trim()
+  const ratio = opts.ratio?.trim()
+  const resolution = opts.resolution?.trim()
+  const family = /^sora2$/i.test(agent) ? 'sora2' : /^minimax/i.test(agent) ? 'minimax' : 'seedance'
+  if (family === 'sora2') {
+    input.size = ratio && /^9:16$|^3:4$|portrait|vertical/i.test(ratio) ? '720x1280' : '1280x720'
+    const d = opts.duration ?? 4
+    input.seconds = String(d >= 12 ? 12 : d >= 8 ? 8 : 4)
+  } else if (family === 'minimax') {
+    if (first) input.firstFrameUrl = first
+    if (last) input.lastFrameUrl = last
+    if (refs?.length) input.referenceImageUrls = refs
+    if (ratio) input.ratio = ratio
+    if (resolution) input.resolution = /^2k$/i.test(resolution) ? '2K' : resolution.toUpperCase()
+    if (opts.duration !== undefined) input.duration = opts.duration
+  } else {
+    input.mode = refs?.length ? 'multimodal' : first && last ? 'i2v-both' : first ? 'i2v-first' : 't2v'
+    if (first) input.imageUrl = first
+    if (last) input.lastFrameUrl = last
+    if (refs?.length) input.referenceImageUrls = refs
+    if (ratio) input.ratio = ratio
+    if (resolution) input.resolution = resolution.toLowerCase()
+    if (opts.duration !== undefined) input.duration = opts.duration
+    if (opts.generateAudio !== undefined) input.generateAudio = opts.generateAudio
+  }
+  return { ...input, ...(opts.extra ?? {}) }
+}
+
+/** /v1/agents 任务响应（任意状态）→ AiAgentTask */
+export function parseAgentTask(agent: string, task: any): AiAgentTask {
+  const t: AiAgentTask = {
+    id: typeof task?.id === 'string' ? task.id : '',
+    agent: typeof task?.agent === 'string' ? task.agent : agent,
+    state: typeof task?.state === 'string' ? task.state : 'unknown',
+  }
+  if (typeof task?.message === 'string' && task.message) t.message = task.message
+  if (task?.output !== undefined && task.output !== null) t.output = task.output
+  if (typeof task?.error === 'string' && task.error) t.error = task.error
+  return t
+}
+
+const TERMINAL_STATES = new Set(['completed', 'failed', 'canceled', 'cancelled', 'rejected'])
+/** 任务是否已到终态（不会再变） */
+export function isTerminalTaskState(state: string): boolean {
+  return TERMINAL_STATES.has(state)
+}
+
+/** 完成态的 agent 任务 → AiVideoResult；非完成态或无视频抛错 */
+export function parseVideoTask(agent: string, task: any): AiVideoResult {
+  const t = parseAgentTask(agent, task)
+  if (t.state !== 'completed') {
+    const msg = t.error ?? `ai.generateVideo: agent 任务未完成（state=${t.state}）`
+    const code = /insufficient balance|余额不足/i.test(msg) ? 'AI_INSUFFICIENT_BALANCE' : 'AI_VIDEO_FAILED'
+    throw new AppSdkError(code, msg, code === 'AI_INSUFFICIENT_BALANCE' ? 402 : undefined)
+  }
+  const out = t.output
+  const v = out?.video
+  const url = typeof v?.url === 'string' ? v.url : typeof out?.videoUrl === 'string' ? out.videoUrl : ''
+  if (!url) throw new AppSdkError('AI_VIDEO_EMPTY', 'ai.generateVideo: agent 返回成功但没有视频')
+  const result: AiVideoResult = { video: { url }, agent: t.agent, taskId: t.id }
+  if (typeof v?.name === 'string' && v.name) result.video.name = v.name
+  if (typeof v?.size === 'number') result.video.size = v.size
+  if (typeof v?.type === 'string' && v.type) result.video.type = v.type
+  const thumb = out?.lastFrameImage?.url ?? out?.thumbnail?.url
+  if (typeof thumb === 'string' && thumb) result.thumbnailUrl = thumb
+  if (typeof out?.totalCredits === 'number') result.totalCredits = out.totalCredits
+  if (out?.metadata !== undefined) result.metadata = out.metadata
+  return result
+}
+
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
+  if (signal?.aborted) { reject(abortError()); return }
+  const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, ms)
+  const onAbort = () => { clearTimeout(timer); reject(abortError()) }
+  signal?.addEventListener('abort', onAbort, { once: true })
+})
+const abortError = () => new AppSdkError('AI_ABORTED', 'ai.waitForTask: 已取消（signal aborted）')
+
 // ---------- platform driver ----------
 function platformAi(cfg: PlatformConfig): AiClient {
   const headers = { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json' }
@@ -679,12 +849,54 @@ function platformAi(cfg: PlatformConfig): AiClient {
       if (!res.ok) await throwHttpError(res, 'ai.generateImage')
       return parseImageTask(agent, await res.json())
     },
+    async generateVideo(opts: AiVideoOptions): Promise<any> {
+      if (!opts?.prompt?.trim()) throw new AppSdkError('AI_VIDEO_PROMPT_REQUIRED', 'ai.generateVideo: prompt 不能为空')
+      const agent = opts.agent ?? cfg.aiVideoAgent ?? DEFAULT_VIDEO_AGENT
+      // 视频 agent 服务端只开放异步；显式 wait:false 让图片类 agent 也能走同一条路
+      const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/agents/${encodeURIComponent(agent)}/tasks`, {
+        method: 'POST', headers, body: JSON.stringify({ input: buildVideoInput(agent, opts), wait: false }), signal: opts.signal,
+      })
+      if (!res.ok) await throwHttpError(res, 'ai.generateVideo')
+      const submitted = parseAgentTask(agent, await res.json())
+      if (!submitted.id) throw new AppSdkError('AI_VIDEO_FAILED', 'ai.generateVideo: 服务端没有返回任务 id')
+      // 提交即失败（参数错 / 余额不足）不用等
+      if (isTerminalTaskState(submitted.state)) return parseVideoTask(agent, submitted)
+      if (opts.wait === false) {
+        const handle: AiVideoTask = { taskId: submitted.id, agent: submitted.agent, state: submitted.state }
+        if (submitted.message) handle.message = submitted.message
+        return handle
+      }
+      opts.onProgress?.(submitted)
+      const final = await this.waitForTask(agent, submitted.id, opts)
+      return parseVideoTask(agent, final)
+    },
+    async getTask(agent, taskId) {
+      const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/agents/${encodeURIComponent(agent)}/tasks/${encodeURIComponent(taskId)}`, {
+        method: 'GET', headers: { authorization: headers.authorization },
+      })
+      if (!res.ok) await throwHttpError(res, 'ai.getTask')
+      return parseAgentTask(agent, await res.json())
+    },
+    async waitForTask(agent, taskId, opts) {
+      const interval = Math.max(250, opts?.pollIntervalMs ?? VIDEO_POLL_INTERVAL_MS)
+      const timeout = opts?.timeoutMs ?? VIDEO_POLL_TIMEOUT_MS
+      const deadline = Date.now() + timeout
+      for (;;) {
+        await sleep(interval, opts?.signal)
+        const task = await this.getTask(agent, taskId)
+        opts?.onProgress?.(task)
+        if (isTerminalTaskState(task.state)) return task
+        if (Date.now() >= deadline) {
+          throw new AppSdkError('AI_VIDEO_TIMEOUT', `ai.waitForTask: 任务 ${taskId} 在 ${String(Math.round(timeout / 1000))} 秒内未完成（state=${task.state}），可稍后再用 ai.getTask 查询`)
+        }
+      }
+    },
     async agents() {
       const res = await cfg.fetchImpl(`${cfg.aiBaseUrl}/agents`, { method: 'GET', headers: { authorization: headers.authorization } })
       if (!res.ok) await throwHttpError(res, 'ai.agents')
       const json: any = await res.json()
       const list: any[] = Array.isArray(json?.data) ? json.data : []
-      return list.filter(a => typeof a?.id === 'string').map(a => ({ id: a.id, name: a.name ?? undefined, description: a.description ?? undefined, version: a.version ?? undefined, iconUrl: a.iconUrl ?? undefined, type: a.type ?? undefined }))
+      return list.filter(a => typeof a?.id === 'string').map(a => ({ id: a.id, name: a.name ?? undefined, description: a.description ?? undefined, version: a.version ?? undefined, iconUrl: a.iconUrl ?? undefined, type: a.type ?? undefined, mode: a.mode === 'async' ? 'async' as const : 'sync' as const }))
     },
   }
 }
@@ -703,6 +915,9 @@ function notConfigured(): AiClient {
     ocr: async () => fail(),
     models: async () => fail(),
     generateImage: async () => fail(),
+    generateVideo: async () => fail(),
+    getTask: async () => fail(),
+    waitForTask: async () => fail(),
     agents: async () => fail(),
   }
 }
@@ -712,7 +927,7 @@ let cached: { key: string; fetchImpl?: typeof fetch; client: AiClient } | null =
 /** 按当前配置取 AI 客户端（惰性、缓存；configure() 后自动重建） */
 export function getAi(): AiClient {
   const cfg = resolveAiConfig()
-  const key = cfg ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.aiEmbedModel}|${cfg.aiImageAgent ?? ''}|${cfg.apiKey.slice(-4)}` : 'none'
+  const key = cfg ? `platform|${cfg.aiBaseUrl}|${cfg.aiModel ?? ''}|${cfg.aiEmbedModel}|${cfg.aiImageAgent ?? ''}|${cfg.aiVideoAgent ?? ''}|${cfg.apiKey.slice(-4)}` : 'none'
   const fetchImpl = cfg?.fetchImpl
   if (!cached || cached.key !== key || cached.fetchImpl !== fetchImpl) cached = { key, fetchImpl, client: cfg ? platformAi(cfg) : notConfigured() }
   return cached.client
@@ -729,5 +944,8 @@ export const ai: AiClient = {
   ocr: (f, o) => getAi().ocr(f, o),
   models: () => getAi().models(),
   generateImage: o => getAi().generateImage(o),
+  generateVideo: (o: AiVideoOptions): Promise<any> => getAi().generateVideo(o),
+  getTask: (a, t) => getAi().getTask(a, t),
+  waitForTask: (a, t, o) => getAi().waitForTask(a, t, o),
   agents: () => getAi().agents(),
 }
