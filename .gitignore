@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .DS_Store
 coverage/
+
+# app-sdk build 从 dist/*.d.ts 生成的 API 速查，随 npm 包发布，不入库（chatu-builder-skill 发布 CI 同样现场生成）
+packages/app-sdk/skills/chatu-quickstart/references/sdk-api.md

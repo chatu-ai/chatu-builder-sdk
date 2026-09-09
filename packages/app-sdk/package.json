@@ -15,7 +15,8 @@
   "files": [
     "dist",
     "skills",
-    "README.md"
+    "README.md",
+    "scripts"
   ],
   "sideEffects": false,
   "repository": {
@@ -44,9 +45,10 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/gen-api-doc.mjs dist skills/chatu-quickstart/references/sdk-api.md",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "apidoc": "node scripts/gen-api-doc.mjs dist skills/chatu-quickstart/references/sdk-api.md"
   },
   "devDependencies": {
     "typescript": "^5.7.0",
@@ -67,5 +69,8 @@
     "@aws-sdk/s3-request-presigner": {
       "optional": true
     }
+  },
+  "bin": {
+    "chatu-app-sdk-apidoc": "scripts/gen-api-doc.mjs"
   }
 }
