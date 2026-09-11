@@ -71,15 +71,17 @@ await auth.users.delete(id);
 - 发码按钮加 60 秒倒计时（服务端也有 60s 频控）；
 - 已登录访问登录页要 `redirect('/')`。
 
-## 三方登录（微信扫码 / 微信公众号 H5 / GitHub）
+## 三方登录（微信扫码 / 微信公众号 H5 / GitHub / Gitee / QQ）
 
-只在**应用自建用户模式**下可用，是邮箱登录的补充（同一个用户体系，三方用户也在 `auth.users` 里，`source` 标记来源）。用户说"微信登录""GitHub 登录""微信里打开自动登录"时用这一节；**完整登录页代码见 [references/login-oauth.md](references/login-oauth.md)**。
+只在**应用自建用户模式**下可用，是邮箱登录的补充（同一个用户体系，三方用户也在 `auth.users` 里，`source` 标记来源）。用户说"微信登录""GitHub 登录""Gitee 登录""QQ 登录""微信里打开自动登录"时用这一节；**完整登录页代码见 [references/login-oauth.md](references/login-oauth.md)**。
 
 | provider | 场景 | 需要的环境变量 | 用户要准备什么 |
 | --- | --- | --- | --- |
 | `wechat` | PC 浏览器里弹二维码，微信扫码 | `WECHAT_APP_ID` `WECHAT_APP_SECRET` | 微信开放平台「网站应用」（企业主体，需审核） |
 | `wechat-mp` | 在微信内打开应用（公众号菜单、聊天分享链接），网页授权登录 | `WECHAT_MP_APP_ID` `WECHAT_MP_APP_SECRET` | 已认证的**服务号**（订阅号没有网页授权） |
 | `github` | GitHub 账号登录，开发者向工具 | `GITHUB_CLIENT_ID` `GITHUB_CLIENT_SECRET` | GitHub OAuth App（个人账号即可，无需审核） |
+| `gitee` | Gitee（码云）账号登录，国内开发者向工具 | `GITEE_CLIENT_ID` `GITEE_CLIENT_SECRET` | Gitee「第三方应用」（个人账号即可，无需审核） |
+| `qq` | QQ 账号登录，国内 C 端产品 | `QQ_APP_ID` `QQ_APP_KEY` | QQ 互联「网站应用」（个人可申请；需站点校验 + 人工审核，通常 1–3 个工作日） |
 
 **怎么选微信**：用户说"微信登录"但没说场景时，问一句"主要在微信里打开，还是电脑浏览器扫码？"——微信内打开更常见，优先 `wechat-mp`；两者都要就两个都配，登录页按 `pickWeChatProvider()` 自动挑（微信内 → `wechat-mp`，否则 → `wechat`）。二者能否识别为同一人取决于用户是否在开放平台绑定了公众号（有 unionid 才合并），如实告知即可。
 
@@ -98,7 +100,7 @@ await auth.users.delete(id);
    ```
    ````
 
-   字段：`preset`（`wechat` / `wechat-mp` / `github`，卡片据此带出后台链接、回调域填写步骤，**必须填**，不要自己编步骤文案）、`vars`（变量名数组；也可写 `{ name, label, secret, required }` 对象）、`title`（可选）、`resume`（用户点"继续"时替他发出的那句话）。一个块只放一个 preset；同时要微信扫码 + 公众号就发两个块。
+   字段：`preset`（`wechat` / `wechat-mp` / `github` / `gitee` / `qq`，卡片据此带出后台链接、回调域填写步骤，**必须填**，不要自己编步骤文案）、`vars`（变量名数组；也可写 `{ name, label, secret, required }` 对象）、`title`（可选）、`resume`（用户点"继续"时替他发出的那句话）。一个块只放一个 preset；同时要微信扫码 + 公众号就发两个块。
 3. **发完块就停**，不要在同一轮继续写登录代码、不要在聊天里追问"AppID 是多少"、不要让用户把密钥贴在对话里。等用户回来（`resume` 那句话）再写代码。
 4. 环境变量已存在时跳过 1–3 直接写代码；写完后**提醒用户回调域已由平台托管**（卡片里显示的域名，用户填到提供方后台即可），不需要在应用里再配任何回调地址。
 
@@ -131,7 +133,9 @@ import { startOAuth, pickWeChatProvider } from '@chatu-ai/app-sdk/browser';
 ### 三方登录的限制（要如实告诉用户）
 
 - 公众号 H5 授权链接**只能在微信里打开**；PC 浏览器里点它会显示"请在微信客户端打开"。预览时用户要在微信里打开预览链接，或用扫码方式。微信内的预览要先在公众平台「网页开发者工具」绑定自己的微信号。
-- 微信开放平台网站应用需要企业主体且审核通过，个人拿不到；用户是个人开发者时建议 GitHub 或邮箱。
+- 微信开放平台网站应用需要企业主体且审核通过，个人拿不到；用户是个人开发者时建议 GitHub / Gitee 或邮箱。
+- QQ 互联网站应用审核通过前登录会报 `redirect uri is illegal`，且必须先把网站地址做站点校验（meta 标签或校验文件，卡片里有步骤）；用户要"马上能用"时先接 Gitee / GitHub，QQ 审核过了再补。
+- QQ 只给昵称头像，没有邮箱；Gitee 的 `email` 也可能为 null（用户未公开）。
 - 三方登录用户没有密码，`auth.users.update()` 改密码会报 `PASSWORD_NOT_ALLOWED`；`email` 可能为 null（微信不给邮箱），**用 `user.id` 做标识**。
 - 渠道账号模式（`CHATU_AUTH_MODE=channel`）下三方登录不可用。
 
@@ -213,7 +217,7 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 - 需要登录的页面要么 `await requireUser()`，要么在 Server Action 里再校验一次——只在前端隐藏按钮不算保护。
 - 单应用单环境上限 1 万用户、每日验证码 200 封（超出报 `CODE_QUOTA_EXCEEDED`）、每日新注册 500 个（`SIGNUP_QUOTA_EXCEEDED`）；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
 - 密码登录同一邮箱连续失败 10 次会锁 15 分钟（`TOO_MANY_ATTEMPTS`）——登录页要把这个错误如实告诉用户，并提示"可以改用邮箱验证码登录"。
-- 没有短信/手机号登录，也没有微信小程序、QQ、支付宝、Google 等其他三方；用户要"手机号登录"时如实说明当前只支持邮箱与微信 / GitHub。不要自己去接任何提供方的 OAuth 接口（`api.weixin.qq.com` / `github.com/login/oauth`），平台已代做。
+- 没有短信/手机号登录，也没有微信小程序、支付宝、Google 等其他三方；用户要"手机号登录"时如实说明当前只支持邮箱与微信 / GitHub / Gitee / QQ。不要自己去接任何提供方的 OAuth 接口（`api.weixin.qq.com` / `github.com/login/oauth` / `gitee.com/oauth` / `graph.qq.com`），平台已代做。
 - 三方登录的密钥只能通过 ```` ```chatu-env ```` 块让用户在面板里配；不要写进代码、`.env` 或聊天。
 
 ## 常见错误
@@ -232,7 +236,7 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 | `AUTH_UNSUPPORTED` | 应用被部署在没有平台数据服务的驱动上（如 edgeone blob） | 部署时选择带平台数据服务的目标 |
 | `READ_ONLY` / 无法注册新用户 | 应用所有者点数不足，数据已置只读 | 已登录用户仍可访问；充值后自动恢复 |
 | `OAUTH_NOT_CONFIGURED`（登录页 `?error=…&missing=A,B`） | 该提供方的环境变量没配或缺一个 | 发 ```` ```chatu-env ```` 块让用户配 `missing` 里的变量，不要在代码里绕 |
-| `OAUTH_PROVIDER_UNKNOWN` | provider 拼错（只有 `wechat` / `wechat-mp` / `github`） | 改 provider 名 |
+| `OAUTH_PROVIDER_UNKNOWN` | provider 拼错（只有 `wechat` / `wechat-mp` / `github` / `gitee` / `qq`） | 改 provider 名 |
 | `OAUTH_CALLBACK_INVALID` / `OAUTH_CALLBACK_INSECURE` | 应用回调地址不合法（非 https、带 fragment 等） | 用模板的 `oauthStartUrl()`，它按当前 origin 拼回调，不要自己传 `callbackUrl` |
 | `OAUTH_STATE_INVALID` / `OAUTH_TICKET_INVALID` | 授权超过 10 分钟 / ticket 超过 60 秒或被重复使用 | 让用户重新点登录；不要缓存或重放 ticket |
 | `OAUTH_PROVIDER_DENIED` | 用户在授权页取消，或 code 已用过 | 登录页显示"已取消授权"，提供重试 |

@@ -57,9 +57,9 @@ await auth.users.update(id, { disabled: true })                // also revokes t
 
 In the Next.js template, `@/lib/platform` wraps this in HttpOnly-cookie helpers: `currentUser()`, `requireUser()`, `signInWithCode()`, `endSession()`.
 
-### Social login (WeChat / WeChat MP / GitHub)
+### Social login (WeChat / WeChat MP / GitHub / Gitee / QQ)
 
-The platform runs the OAuth dance; the app only needs a provider's credentials in its env vars (`WECHAT_APP_ID`/`WECHAT_APP_SECRET`, `WECHAT_MP_APP_ID`/`WECHAT_MP_APP_SECRET`, `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`) and two routes (bundled in the template):
+The platform runs the OAuth dance; the app only needs a provider's credentials in its env vars (`WECHAT_APP_ID`/`WECHAT_APP_SECRET`, `WECHAT_MP_APP_ID`/`WECHAT_MP_APP_SECRET`, `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`, `GITEE_CLIENT_ID`/`GITEE_CLIENT_SECRET`, `QQ_APP_ID`/`QQ_APP_KEY`) and two routes (bundled in the template):
 
 ```ts
 // server: start → provider authorize URL (302 there); the platform redirects back to callbackUrl?ticket=…
@@ -74,7 +74,7 @@ import { startOAuth, pickWeChatProvider } from '@chatu-ai/app-sdk/browser'
 startOAuth(pickWeChatProvider(), { returnTo: '/' })   // popup inside an iframe (Builder preview), full redirect otherwise
 ```
 
-`start` throws `OAUTH_NOT_CONFIGURED` (412) with `err.details.missing` listing the env vars still unset. Social users have `source: 'wechat' | 'wechat-mp' | 'github'`, no password, and possibly `email: null`. The memory driver ships a mock flow (`start` returns `callbackUrl?ticket=memt_…`, `exchange` creates `wx_mock_wechat` / `gh_mock_github`).
+`start` throws `OAUTH_NOT_CONFIGURED` (412) with `err.details.missing` listing the env vars still unset. Social users have `source: 'wechat' | 'wechat-mp' | 'github' | 'gitee' | 'qq'`, no password, and possibly `email: null`. The memory driver ships a mock flow (`start` returns `callbackUrl?ticket=memt_…`, `exchange` creates `wx_mock_wechat` / `gh_mock_github`).
 
 Limits: 10k users per app/env, 200 codes and 500 signups per day, code valid 10 min / 5 tries, 60s per-email resend window, password login locks an email for 15 min after 10 consecutive failures.
 

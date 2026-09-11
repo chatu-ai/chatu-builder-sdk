@@ -24,7 +24,7 @@ export interface UserListResult { users: AppUser[]; total: number; nextSkip: num
 export interface UserPatch { name?: string | null; avatar?: string | null; disabled?: boolean; meta?: Record<string, unknown>; password?: string }
 
 /** 三方登录提供方：wechat（开放平台扫码，PC）、wechat-mp（公众号 H5，微信内）、github */
-export type OAuthProvider = 'wechat' | 'wechat-mp' | 'github' | (string & {})
+export type OAuthProvider = 'wechat' | 'wechat-mp' | 'github' | 'gitee' | 'qq' | (string & {})
 export interface OAuthStartOptions {
   /** 应用自己的回调路由**绝对地址**（如 `${origin}/api/auth/oauth/callback`）；平台登录完成后带 ?ticket= 回到这里 */
   callbackUrl: string
@@ -101,7 +101,7 @@ function describeAuthError(code: string, json: any): string | undefined {
       const domain = json?.callbackDomain ? `；提供方后台的回调域填 ${json.callbackDomain}` : ''
       return `三方登录未配置：请在「环境变量」里添加 ${missing.join('、') || '所需变量'}${domain}`
     }
-    case 'OAUTH_PROVIDER_UNKNOWN': return '不支持的登录提供方（可用：wechat / wechat-mp / github）'
+    case 'OAUTH_PROVIDER_UNKNOWN': return '不支持的登录提供方（可用：wechat / wechat-mp / github / gitee / qq）'
     case 'OAUTH_CALLBACK_INVALID': return 'callbackUrl 必须是应用自己的绝对地址（https://…/api/auth/oauth/callback）'
     case 'OAUTH_CALLBACK_INSECURE': return 'callbackUrl 必须是 https（本机 localhost 除外）'
     case 'OAUTH_TICKET_INVALID': return '登录票据无效或已过期（60 秒内只能用一次），请重新登录'
@@ -234,7 +234,7 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
 /** memory 驱动在 channel 模式下的固定密码（仅本机/测试用，无任何真实校验） */
 const MEMORY_CHANNEL_PASSWORD = '123456'
 /** memory 驱动里视为「已配置」的三方登录提供方 */
-const MEMORY_OAUTH_PROVIDERS: OAuthProvider[] = ['wechat', 'wechat-mp', 'github']
+const MEMORY_OAUTH_PROVIDERS: OAuthProvider[] = ['wechat', 'wechat-mp', 'github', 'gitee', 'qq']
 
 function memoryAuth(channelMode: boolean): AuthClient {
   const users = new Map<string, AppUser & { pwd?: string }>()
@@ -260,7 +260,7 @@ function memoryAuth(channelMode: boolean): AuthClient {
   return {
     oauth: {
       async start(provider, opts) {
-        if (!MEMORY_OAUTH_PROVIDERS.includes(provider)) throw new AppSdkError('OAUTH_PROVIDER_UNKNOWN', '不支持的登录提供方（可用：wechat / wechat-mp / github）')
+        if (!MEMORY_OAUTH_PROVIDERS.includes(provider)) throw new AppSdkError('OAUTH_PROVIDER_UNKNOWN', '不支持的登录提供方（可用：wechat / wechat-mp / github / gitee / qq）')
         if (!/^https?:\/\//.test(opts.callbackUrl)) throw new AppSdkError('OAUTH_CALLBACK_INVALID', 'callbackUrl 必须是绝对地址')
         const ticket = `memt_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
         oauthTickets.set(ticket, { provider, expiresAt: Date.now() + 60_000 })
@@ -273,13 +273,15 @@ function memoryAuth(channelMode: boolean): AuthClient {
         oauthTickets.delete(ticket)
         if (!t || t.expiresAt < Date.now()) throw new AppSdkError('OAUTH_TICKET_INVALID', '登录票据无效或已过期')
         // 每个提供方一个固定假用户，重复登录归并
-        const id = `${t.provider === 'github' ? 'gh' : 'wx'}_mock_${t.provider.replace('-', '_')}`
+        const prefix = t.provider === 'github' ? 'gh' : t.provider === 'gitee' ? 'gitee' : t.provider === 'qq' ? 'qq' : 'wx'
+        const id = `${prefix}_mock_${t.provider.replace('-', '_')}`
         let user = users.get(id)
         const created = !user
         if (!user) {
           const now = Date.now()
-          user = { id, email: t.provider === 'github' ? 'mock@example.com' : null, name: `${t.provider} 测试用户`, avatar: null, createdAt: now, lastLoginAt: now, disabled: false, meta: { oauth: { [t.provider]: { mock: true } } }, source: t.provider }
-          if (t.provider === 'github') user.username = 'mock-user'
+          const dev = t.provider === 'github' || t.provider === 'gitee'   // 代码托管平台的假用户带邮箱与登录名，微信/QQ 没有
+          user = { id, email: dev ? 'mock@example.com' : null, name: `${t.provider} 测试用户`, avatar: null, createdAt: now, lastLoginAt: now, disabled: false, meta: { oauth: { [t.provider]: { mock: true } } }, source: t.provider }
+          if (dev) user.username = 'mock-user'
           users.set(id, user)
           seq.set(id, nextSeq++)
         }

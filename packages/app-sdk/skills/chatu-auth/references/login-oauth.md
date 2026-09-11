@@ -68,7 +68,14 @@ export function OAuthButtons({ enabled, returnTo }: { enabled: string[]; returnT
     if (!r.ok) setError(r.error === 'OAUTH_POPUP_CLOSED' ? '登录窗口已关闭' : '登录失败，请重试');
   }
 
-  if (!wechatProvider && !enabled.includes('github')) return null;
+  // 其余提供方：按钮文案与顺序按产品需要调整，provider 名只能是 github / gitee / qq
+  const others = [
+    { provider: 'qq', label: 'QQ 登录', className: 'w-full rounded-md bg-[#12B7F5] px-3 py-2 text-white' },
+    { provider: 'gitee', label: '使用 Gitee 登录', className: 'w-full rounded-md border px-3 py-2' },
+    { provider: 'github', label: '使用 GitHub 登录', className: 'w-full rounded-md border px-3 py-2' },
+  ].filter(o => enabled.includes(o.provider));
+
+  if (!wechatProvider && others.length === 0) return null;
   return (
     <div className="space-y-2">
       {wechatProvider ? (
@@ -77,12 +84,11 @@ export function OAuthButtons({ enabled, returnTo }: { enabled: string[]; returnT
           微信登录
         </button>
       ) : null}
-      {enabled.includes('github') ? (
-        <button type="button" onClick={() => go('github')}
-          className="w-full rounded-md border px-3 py-2">
-          使用 GitHub 登录
+      {others.map(o => (
+        <button key={o.provider} type="button" onClick={() => go(o.provider)} className={o.className}>
+          {o.label}
         </button>
-      ) : null}
+      ))}
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
     </div>
   );
@@ -99,9 +105,9 @@ export function OAuthButtons({ enabled, returnTo }: { enabled: string[]; returnT
 
 ```ts
 const me = await requireUser();
-me.source;    // 'wechat' | 'wechat-mp' | 'github' | undefined（邮箱用户）
-me.email;     // 微信用户为 null，GitHub 用户为其主邮箱（可能也为 null）
-me.username;  // GitHub 登录名；微信没有
+me.source;    // 'wechat' | 'wechat-mp' | 'github' | 'gitee' | 'qq' | undefined（邮箱用户）
+me.email;     // 微信 / QQ 用户为 null，GitHub / Gitee 用户为其主邮箱（未公开时也为 null）
+me.username;  // GitHub / Gitee 登录名；微信 / QQ 没有
 me.meta.oauth // { wechat: { openid, unionid?, ... } } 之类的提供方资料，只读
 ```
 

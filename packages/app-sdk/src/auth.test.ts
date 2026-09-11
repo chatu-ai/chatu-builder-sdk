@@ -205,10 +205,10 @@ d('auth memory driver — oauth 本机替身', () => {
   })
 
   it('拒绝未知提供方与相对 callbackUrl；providers 全部 configured', async () => {
-    await expect(auth.oauth.start('qq', { callbackUrl: 'http://localhost/cb' })).rejects.toMatchObject({ code: 'OAUTH_PROVIDER_UNKNOWN' })
+    await expect(auth.oauth.start('alipay', { callbackUrl: 'http://localhost/cb' })).rejects.toMatchObject({ code: 'OAUTH_PROVIDER_UNKNOWN' })
     await expect(auth.oauth.start('github', { callbackUrl: '/cb' })).rejects.toMatchObject({ code: 'OAUTH_CALLBACK_INVALID' })
     const { providers } = await auth.oauth.providers()
-    expect(providers.map(p => p.provider)).toEqual(['wechat', 'wechat-mp', 'github'])
+    expect(providers.map(p => p.provider)).toEqual(['wechat', 'wechat-mp', 'github', 'gitee', 'qq'])
     expect(providers.every(p => p.configured)).toBe(true)
   })
 
@@ -216,6 +216,16 @@ d('auth memory driver — oauth 本机替身', () => {
     const { url } = await auth.oauth.start('github', { callbackUrl: 'http://localhost/cb' })
     const r = await auth.oauth.exchange(new URL(url).searchParams.get('ticket')!)
     expect(r.user).toMatchObject({ source: 'github', username: 'mock-user', email: 'mock@example.com' })
+  })
+
+  it('gitee 假用户同 github（有 username/email）；qq 同微信（只有昵称，无 email）', async () => {
+    const g = await auth.oauth.start('gitee', { callbackUrl: 'http://localhost/cb' })
+    const gr = await auth.oauth.exchange(new URL(g.url).searchParams.get('ticket')!)
+    expect(gr.user).toMatchObject({ id: 'gitee_mock_gitee', source: 'gitee', username: 'mock-user', email: 'mock@example.com' })
+    const q = await auth.oauth.start('qq', { callbackUrl: 'http://localhost/cb' })
+    const qr = await auth.oauth.exchange(new URL(q.url).searchParams.get('ticket')!)
+    expect(qr.user).toMatchObject({ id: 'qq_mock_qq', source: 'qq', email: null })
+    expect(qr.user.username).toBeUndefined()
   })
 })
 

@@ -74,6 +74,37 @@ export const ENV_PRESETS: Record<string, EnvPreset> = {
     ],
     notes: ['国内访问 GitHub 偶尔不稳定，登录失败时让用户重试即可。'],
   },
+  gitee: {
+    id: 'gitee',
+    title: '配置 Gitee 登录',
+    summary: '用 Gitee（码云）账号登录，国内开发者向工具的首选。个人账号即可创建，无需审核。',
+    vars: [
+      { name: 'GITEE_CLIENT_ID', label: '第三方应用的 Client ID', secret: false },
+      { name: 'GITEE_CLIENT_SECRET', label: '第三方应用的 Client Secret', secret: true },
+    ],
+    steps: [
+      { text: '打开 Gitee → 设置 → 数据管理 → 第三方应用 → 创建应用', href: 'https://gitee.com/oauth/applications' },
+      { text: '应用主页填你的应用地址（预览地址即可，之后可改）' },
+      { text: '应用回调地址填写下面这个完整地址', copy: '{callbackUrl}' },
+      { text: '权限勾选 user_info；创建后把 Client ID 与 Client Secret 填到下方' },
+    ],
+  },
+  qq: {
+    id: 'qq',
+    title: '配置 QQ 登录',
+    summary: '用 QQ 账号登录，适合面向大众的国内应用。需要在 QQ 互联创建「网站应用」并通过审核（个人开发者也可申请）。',
+    vars: [
+      { name: 'QQ_APP_ID', label: '网站应用的 APP ID', secret: false },
+      { name: 'QQ_APP_KEY', label: '网站应用的 APP Key', secret: true },
+    ],
+    steps: [
+      { text: '打开 QQ 互联 → 应用管理 → 创建应用 → 网站应用（首次需完成开发者资质认证）', href: 'https://connect.qq.com/manage.html' },
+      { text: '网站地址填你的应用地址，并按页面提示在应用首页放置站点校验（meta 标签或校验文件）——这一步做完可以让 Builder 帮你加到 layout 里' },
+      { text: '网站回调域填写下面这个完整地址', copy: '{callbackUrl}' },
+      { text: '审核通过后，把 APP ID 与 APP Key 填到下方' },
+    ],
+    notes: ['QQ 互联的网站应用要人工审核（通常 1–3 个工作日），审核通过前登录会报 redirect uri is illegal。'],
+  },
 }
 
 export function getEnvPreset(id: string | undefined | null): EnvPreset | undefined {
