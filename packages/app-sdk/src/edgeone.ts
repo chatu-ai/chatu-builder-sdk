@@ -1,9 +1,9 @@
 import type { EdgeoneConfig } from './config.js'
 import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
-import type { KvClient } from './kv.js'
+import type { KvDriver } from './kv.js'
 import type { StorageClient, StorageObject } from './storage.js'
-import { applyUpdate, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
+import { applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
 
 /**
  * EdgeOne Pages Blob 驱动（部署到 EdgeOne Pages 时使用；kv 与 storage 都落在 Pages Blob）
@@ -64,7 +64,7 @@ function wrapErr(e: any, what: string): AppSdkError {
   return new AppSdkError(code, `${what}: ${e?.message ?? String(e)}`)
 }
 
-export function edgeoneKv(cfg: EdgeoneConfig): KvClient {
+export function edgeoneKv(cfg: EdgeoneConfig): KvDriver {
   const getStore = storeFactory(cfg)
   const store = () => getStore(cfg.kvStore)
   const readEnv = async (key: string): Promise<Envelope | null> => {
@@ -86,6 +86,13 @@ export function edgeoneKv(cfg: EdgeoneConfig): KvClient {
   return {
     async get(key) { return ((await readEnv(key))?.v as any) ?? null },
     async set(key, value, opts) { await writeEnv(key, { v: value, exp: opts?.ex ? Date.now() + opts.ex * 1000 : undefined }) },
+    async setnx(key, value, opts) {
+      // Pages Blob 没有原子写：先读后写，高并发下两个请求可能都判为"不存在"——best-effort，SKILL 里已写明
+      if (await readEnv(key)) return false
+      await writeEnv(key, { v: value, exp: opts?.ex ? Date.now() + opts.ex * 1000 : undefined })
+      return true
+    },
+
     async del(key) {
       const s = await store()
       const existed = (await readEnv(key)) !== null
@@ -244,6 +251,16 @@ export function edgeoneDb(cfg: EdgeoneConfig): DbClient {
           try { await s.setJSON(docKey(coll, id), next) } catch (e) { throw wrapErr(e, 'db update') }
           return next
         },
+        async updateIf(id, input, ifMatch) {
+          // Blob 没有 CAS：读-判-写之间仍有窗口，best-effort（要强一致就用平台托管，见技术方案 34 §2.3）
+          const cur = await this.get(id)
+          if (!cur || !matchesFilter(cur, ifMatch)) return null
+          const next = applyUpdate(cur, input)
+          const s = await store()
+          try { await s.setJSON(docKey(coll, id), next) } catch (e) { throw wrapErr(e, 'db updateIf') }
+          return next
+        },
+        getOrCreate(filter, doc) { return getOrCreateWith(this, coll, filter, doc) },
         async replace(id, doc) {
           const cur = await this.get(id)
           const saved = withMeta<T>(doc as Record<string, unknown>, id, cur?._createdAt ?? Date.now(), Date.now())

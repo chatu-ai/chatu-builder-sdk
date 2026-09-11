@@ -1,7 +1,7 @@
 import type { ByoConfig } from './config.js'
 import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
-import type { KvClient } from './kv.js'
+import type { KvDriver } from './kv.js'
 import type { StorageClient } from './storage.js'
 
 /**
@@ -10,7 +10,7 @@ import type { StorageClient } from './storage.js'
  * - 对象存储：@aws-sdk/client-s3 + @aws-sdk/s3-request-presigner（`npm i @aws-sdk/client-s3 @aws-sdk/s3-request-presigner`），
  *   S3_ENDPOINT / S3_REGION / S3_BUCKET / S3_ACCESS_KEY / S3_SECRET_KEY / S3_PREFIX / S3_FORCE_PATH_STYLE（腾讯云 COS：endpoint https://cos.<region>.myqcloud.com）
  */
-export function byoKv(cfg: ByoConfig, fallback: KvClient): KvClient {
+export function byoKv(cfg: ByoConfig, fallback: KvDriver): KvDriver {
   if (!cfg.redisUrl) return fallback
   let clientPromise: Promise<any> | null = null
   const client = () => (clientPromise ??= optionalImport<any>('ioredis', 'run `npm i ioredis`').then(m => new (m.default ?? m.Redis ?? m)(cfg.redisUrl, { lazyConnect: false, maxRetriesPerRequest: 2 })))
@@ -19,6 +19,12 @@ export function byoKv(cfg: ByoConfig, fallback: KvClient): KvClient {
   return {
     async get(key) { return parse(await (await client()).get(k(key))) },
     async set(key, value, opts) { const c = await client(); const v = JSON.stringify(value); if (opts?.ex) await c.set(k(key), v, 'EX', opts.ex); else await c.set(k(key), v) },
+    async setnx(key, value, opts) {
+      const c = await client()
+      const v = JSON.stringify(value)
+      const r = opts?.ex ? await c.set(k(key), v, 'EX', opts.ex, 'NX') : await c.set(k(key), v, 'NX')
+      return r === 'OK'
+    },
     async del(key) { return (await (await client()).del(k(key))) > 0 },
     async incr(key, by = 1) { try { return Number(await (await client()).incrby(k(key), by)) } catch (e: any) { throw new AppSdkError('NOT_AN_INTEGER', e?.message ?? 'incr failed') } },
     async expire(key, seconds) { return (await (await client()).expire(k(key), seconds)) === 1 },

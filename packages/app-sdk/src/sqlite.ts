@@ -1,8 +1,8 @@
 import type { SqliteConfig } from './config.js'
 import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
-import type { KvClient } from './kv.js'
-import { applyUpdate, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
+import type { KvDriver } from './kv.js'
+import { applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
 
 /**
  * 本地 SQLite 驱动（技术方案 33；CHATU_DATA_DRIVER=sqlite）：db 与 kv 落到同一个文件，引擎是 Node 内置 `node:sqlite`（≥ 22.13），零 npm 依赖。
@@ -167,6 +167,17 @@ export function sqliteDb(cfg: SqliteConfig): DbClient {
             return next
           })
         },
+        async updateIf(id, input, ifMatch) {
+          const db = await open(cfg)
+          return transaction(db, () => {
+            const cur = getOne(db, id)
+            if (!cur || !matchesFilter(cur, ifMatch)) return null
+            const next = applyUpdate(cur, input)
+            db.prepare('UPDATE docs SET body = ?, updated_at = ? WHERE collection = ? AND id = ?').run(bodyOf(next as Record<string, unknown>), next._updatedAt, name, id)
+            return next
+          })
+        },
+        getOrCreate(filter, doc) { return getOrCreateWith<T>(this, name, filter, doc) },
         async replace(id, doc) {
           const db = await open(cfg)
           return transaction(db, () => {
@@ -204,7 +215,7 @@ export function sqliteDb(cfg: SqliteConfig): DbClient {
 }
 
 // ---------- kv ----------
-export function sqliteKv(cfg: SqliteConfig): KvClient {
+export function sqliteKv(cfg: SqliteConfig): KvDriver {
   /** 读一条未过期的记录；过期则顺手删掉 */
   const live = (db: Database, key: string): { value: unknown; expiresAt: number | null } | null => {
     const row = db.prepare('SELECT value, expires_at FROM kv WHERE key = ?').get(key)
@@ -226,6 +237,14 @@ export function sqliteKv(cfg: SqliteConfig): KvClient {
     async set(key, value, opts) {
       const db = await open(cfg)
       put(db, key, value, opts?.ex ? Date.now() + opts.ex * 1000 : null)
+    },
+    async setnx(key, value, opts) {
+      const db = await open(cfg)
+      return transaction(db, () => {
+        if (live(db, key)) return false
+        put(db, key, value, opts?.ex ? Date.now() + opts.ex * 1000 : null)
+        return true
+      })
     },
     async del(key) {
       const db = await open(cfg)

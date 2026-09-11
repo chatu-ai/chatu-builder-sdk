@@ -118,6 +118,11 @@ export function configVersion(): number {
   return version
 }
 
+/** 读环境变量（不依赖 @types/node，浏览器/边缘运行时下返回 undefined） */
+export function readEnv(name: string): string | undefined {
+  return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[name]
+}
+
 export function resolveConfig(): ResolvedConfig {
   // 不依赖 @types/node：通过 globalThis 读取 process.env
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process

@@ -1,4 +1,4 @@
-import { configVersion, resolveAuthMode, resolveConfig, type PlatformConfig } from './config.js'
+import { configVersion, readEnv, resolveAuthMode, resolveConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
 
 /** 应用自己的终端用户（与 ChatU 平台账号无关） */
@@ -22,6 +22,18 @@ export interface SignInResult { token: string; user: AppUser; created: boolean }
 export interface SendCodeResult { sent: boolean; /** 仅预览环境且平台未配置邮件通道时返回，便于调试 */ devCode?: string | null }
 export interface UserListResult { users: AppUser[]; total: number; nextSkip: number | null }
 export interface UserPatch { name?: string | null; avatar?: string | null; disabled?: boolean; meta?: Record<string, unknown>; password?: string }
+
+/** 角色读写（技术方案 34 §3）：存 user.meta.roles，ADMIN_EMAILS 里的邮箱隐式 admin */
+export interface AuthRoles {
+  /** 这个用户的角色列表（含 ADMIN_EMAILS 带来的 admin）；未登录返回空数组 */
+  of(user: AppUser | null | undefined): string[]
+  /** 是否具备其中任一角色 */
+  has(user: AppUser | null | undefined, ...roles: string[]): boolean
+  /** 给用户加角色（读 meta → 合并 → 整体写回），返回更新后的用户 */
+  grant(userId: string, ...roles: string[]): Promise<AppUser>
+  /** 去掉角色（ADMIN_EMAILS 带来的 admin 去不掉，要改环境变量） */
+  revoke(userId: string, ...roles: string[]): Promise<AppUser>
+}
 
 /** 三方登录提供方：wechat（开放平台扫码，PC）、wechat-mp（公众号 H5，微信内）、github */
 export type OAuthProvider = 'wechat' | 'wechat-mp' | 'github' | 'gitee' | 'qq' | (string & {})
@@ -66,6 +78,13 @@ export interface AuthClient {
     update(id: string, patch: UserPatch): Promise<AppUser>
     delete(id: string): Promise<boolean>
   }
+  /**
+   * 角色（技术方案 34 §3）：角色存在 `user.meta.roles` 里，另外 `ADMIN_EMAILS` 环境变量里的邮箱**隐式拥有 admin**
+   * （第一个管理员就是这么来的，不需要先有人给他授权）。
+   */
+  roles: AuthRoles
+  /** 要求用户具备其中任一角色，否则抛 AppSdkError('FORBIDDEN', …, 403)；返回原用户方便串写 */
+  requireRole(user: AppUser | null | undefined, ...roles: string[]): AppUser
   /**
    * 三方登录（微信扫码 / 公众号 H5 / GitHub）。三步都在**应用服务端**调用：
    * 1. start(provider, { callbackUrl }) 取授权页地址 → 302 过去（或弹窗打开）；
@@ -112,7 +131,7 @@ function describeAuthError(code: string, json: any): string | undefined {
 }
 
 // ---------- platform driver ----------
-function platformAuth(cfg: PlatformConfig): AuthClient {
+function platformAuth(cfg: PlatformConfig): AuthDriver {
   const headers = { 'x-api-key': cfg.apiKey, 'x-chatu-env': cfg.env, 'content-type': 'application/json' }
   /**
    * 会话缓存：getSession() 会被每个请求调用，而每次调用都计费（auth_ops）。
@@ -236,7 +255,7 @@ const MEMORY_CHANNEL_PASSWORD = '123456'
 /** memory 驱动里视为「已配置」的三方登录提供方 */
 const MEMORY_OAUTH_PROVIDERS: OAuthProvider[] = ['wechat', 'wechat-mp', 'github', 'gitee', 'qq']
 
-function memoryAuth(channelMode: boolean): AuthClient {
+function memoryAuth(channelMode: boolean): AuthDriver {
   const users = new Map<string, AppUser & { pwd?: string }>()
   /** 注册序号：同一毫秒创建的用户也要有稳定的先后顺序 */
   const seq = new Map<string, number>()
@@ -381,7 +400,7 @@ function memoryAuth(channelMode: boolean): AuthClient {
 }
 
 /** byo / edgeone 等驱动没有用户存储：每个方法都以明确错误 reject，而不是在取客户端时同步抛出 */
-function unsupportedAuth(kind: string): AuthClient {
+function unsupportedAuth(kind: string): AuthDriver {
   const fail = (): never => {
     throw new AppSdkError(
       'AUTH_UNSUPPORTED',
@@ -409,6 +428,54 @@ function unsupportedAuth(kind: string): AuthClient {
   }
 }
 
+/** 驱动只实现业务能力，roles / requireRole 由 withRoles 统一补上 */
+type AuthDriver = Omit<AuthClient, 'roles' | 'requireRole'>
+
+/** ADMIN_EMAILS（逗号/分号/空格分隔）里的邮箱隐式拥有 admin —— 让第一个管理员不必先被授权 */
+function adminEmails(): string[] {
+  return (readEnv('ADMIN_EMAILS') ?? readEnv('CHATU_ADMIN_EMAILS') ?? '')
+    .split(/[,;\s]+/)
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function rolesOf(user: AppUser | null | undefined): string[] {
+  if (!user) return []
+  const raw = (user.meta as Record<string, unknown> | undefined)?.roles
+  const list = Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : typeof raw === 'string' ? [raw] : []
+  const set = new Set(list.map(r => r.trim()).filter(Boolean))
+  if (user.email && adminEmails().includes(user.email.toLowerCase())) set.add('admin')
+  return [...set]
+}
+
+/** 给任意驱动补上角色能力：of/has/requireRole 是纯函数，grant/revoke 走 users.get + users.update */
+function withRoles(inner: AuthDriver): AuthClient {
+  const write = async (userId: string, change: (cur: Set<string>) => void): Promise<AppUser> => {
+    const user = await inner.users.get(userId)
+    if (!user) throw new AppSdkError('USER_NOT_FOUND', `user ${userId} not found`, 404)
+    const raw = (user.meta as Record<string, unknown> | undefined)?.roles
+    const cur = new Set(Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : [])
+    change(cur)
+    // users.update 的 meta 是整体替换，所以要带上原有字段一起写回
+    return inner.users.update(userId, { meta: { ...(user.meta ?? {}), roles: [...cur] } })
+  }
+  return {
+    ...inner,
+    roles: {
+      of: rolesOf,
+      has: (user, ...roles) => { const mine = rolesOf(user); return roles.some(r => mine.includes(r)) },
+      grant: (userId, ...roles) => write(userId, cur => roles.forEach(r => cur.add(r))),
+      revoke: (userId, ...roles) => write(userId, cur => roles.forEach(r => cur.delete(r))),
+    },
+    requireRole(user, ...roles) {
+      if (!user) throw new AppSdkError('FORBIDDEN', '需要登录', 403)
+      const mine = rolesOf(user)
+      if (!roles.some(r => mine.includes(r))) throw new AppSdkError('FORBIDDEN', `需要 ${roles.join(' / ')} 角色`, 403)
+      return user
+    },
+  }
+}
+
 let cached: { key: string; client: AuthClient } | null = null
 
 /** 按当前配置取 auth 客户端（惰性、缓存；configure() 后自动重建） */
@@ -423,9 +490,9 @@ export function getAuth(): AuthClient {
   if (!cached || cached.key !== key) {
     cached = {
       key,
-      client: platform ? platformAuth(platform)
+      client: withRoles(platform ? platformAuth(platform)
         : cfg.kind === 'memory' ? memoryAuth(resolveAuthMode() === 'channel')
-          : unsupportedAuth(cfg.kind),
+          : unsupportedAuth(cfg.kind)),
     }
   }
   return cached.client
@@ -445,6 +512,13 @@ export const auth: AuthClient = {
     update: (id, patch) => getAuth().users.update(id, patch),
     delete: (id) => getAuth().users.delete(id),
   },
+  roles: {
+    of: (user) => getAuth().roles.of(user),
+    has: (user, ...roles) => getAuth().roles.has(user, ...roles),
+    grant: (userId, ...roles) => getAuth().roles.grant(userId, ...roles),
+    revoke: (userId, ...roles) => getAuth().roles.revoke(userId, ...roles),
+  },
+  requireRole: (user, ...roles) => getAuth().requireRole(user, ...roles),
   oauth: {
     start: (provider, opts) => getAuth().oauth.start(provider, opts),
     exchange: (ticket) => getAuth().oauth.exchange(ticket),

@@ -1,6 +1,6 @@
 ---
 name: chatu-kv
-description: 平台托管 KV 存储与限流（@chatu-ai/app-sdk 的 kv、ratelimit）。当应用需要保存任何数据——待办、笔记、配置、计数器、用户提交的内容、列表数据——或需要给接口限流/防刷（AI 调用、验证码、表单提交）时使用。禁止引入 supabase/prisma/mongoose/mysql/redis 等外部数据库。
+description: 平台托管 KV 存储与限流（@chatu-ai/app-sdk 的 kv、ratelimit）。当应用需要保存任何数据——待办、笔记、配置、计数器、用户提交的内容、列表数据——或需要给接口限流/防刷（AI 调用、验证码、表单提交）、幂等与互斥锁（setnx / lock）时使用。禁止引入 supabase/prisma/mongoose/mysql/redis 等外部数据库。
 ---
 
 # KV 存储（kv）
@@ -25,7 +25,31 @@ const removed = await kv.del('todo:abc');                       // boolean
 const n = await kv.incr('views');                               // 原子自增，返回新值；incr('views', 5) 加 5
 await kv.expire('draft:1', 3600);                               // 给已有键设过期
 const { keys, nextCursor } = await kv.list('todo:', { limit: 100 }); // 按前缀列键（分页游标）
+
+// 原子写：只在键不存在时写入（幂等、唯一占位）
+const first = await kv.setnx('order:' + requestId, 1, { ex: 3600 });  // true = 这次是第一个，false = 已经有人处理过
 ```
+
+### 幂等与互斥锁
+
+```ts
+// 幂等：同一次提交/同一个回调只处理一次
+if (!(await kv.setnx(`submitted:${requestId}`, 1, { ex: 86400 }))) return { ok: true, dedup: true };
+
+// 互斥锁：把"读 → 判断 → 写"整段串起来（拿不到返回 null，别无限等）
+const lock = await kv.lock(`seat:${id}`, { ttlMs: 5000, waitMs: 2000 });
+if (!lock) return { error: '正忙，请稍后重试' };
+try {
+  // 临界区：这里的读写不会和别的请求交错
+} finally {
+  await lock.release();     // 必须放 finally，漏了就要等 ttl 到期
+}
+```
+
+- `ttlMs` 要大于临界区耗时（默认 10 秒）：持有者崩溃时靠它自动释放。
+- `waitMs` 默认 0 = 拿不到立刻返回 `null`；等待也不要超过几秒，页面不能干等。
+- 只锁"同一个东西"（同一个座位 / 同一个用户），别用一把全局锁把整个应用串起来。
+- 数据库里的"有就取没有才建""够了才扣"直接用 `db` 的 `getOrCreate` / `updateIf`，不用自己加锁（见 `chatu-db`）。
 
 ### 带校验的读取（推荐）
 
@@ -124,6 +148,8 @@ export async function POST(req: Request) {
 - 不要引入 redis/ioredis 客户端——`kv` 已经是托管服务。
 - 用户明确要求改用本地 SQLite 时（见 `chatu-db` 的「平台托管还是本地 SQLite」，不主动推荐），`kv` 随 `CHATU_DATA_DRIVER=sqlite` 一起落到同一个文件，API 不变。
 - 计数/限流不要用 `get` 后 `set`（会丢计数）；用 `incr` 或 `ratelimit`。
+- "查一下有没有，没有就写"不要用 `get` + `set`（并发下两个都会写）；用 `setnx`，或 `db` 的 `getOrCreate`。
+- EdgeOne 存储驱动下 `setnx` / `lock` 是 best-effort（Blob 没有原子写），严格互斥要用平台托管。
 
 ## 常见错误
 

@@ -58,6 +58,17 @@ await auth.users.update(id, { disabled: true })                // also revokes t
 
 In the Next.js template, `@/lib/platform` wraps this in HttpOnly-cookie helpers: `currentUser()`, `requireUser()`, `signInWithCode()`, `endSession()`.
 
+### Roles (admin pages)
+
+Roles live in `user.meta.roles`; emails listed in the `ADMIN_EMAILS` env var implicitly hold `admin`, so the first administrator needs no bootstrap step.
+
+```ts
+auth.requireRole(user, 'admin')          // throws AppSdkError('FORBIDDEN', …, 403)
+auth.roles.has(user, 'admin', 'editor')  // pure check, no request
+await auth.roles.grant(userId, 'editor') // merges into meta.roles
+await auth.roles.revoke(userId, 'editor')
+```
+
 ### Social login (WeChat / WeChat MP / GitHub / Gitee / QQ)
 
 The platform runs the OAuth dance; the app only needs a provider's credentials in its env vars (`WECHAT_APP_ID`/`WECHAT_APP_SECRET`, `WECHAT_MP_APP_ID`/`WECHAT_MP_APP_SECRET`, `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`, `GITEE_CLIENT_ID`/`GITEE_CLIENT_SECRET`, `QQ_APP_ID`/`QQ_APP_KEY`) and two routes (bundled in the template):
@@ -240,6 +251,39 @@ clip is roughly 100k–400k points (about ¥2–8), Sora2 / MiniMaxH3 2K more �
 into anything that runs unattended. Failures throw `AppSdkError` (`AI_VIDEO_FAILED`, `AI_INSUFFICIENT_BALANCE`,
 `AI_VIDEO_EMPTY`); the state before failure is not charged. Agent-specific knobs (`seed`, `watermark`, `cameraFixed`,
 MiniMaxH3 `referenceVideoUrls`, …) go in `extra`.
+
+## Atomic writes
+
+"Check then write" races (duplicate sign-ups, overselling the last seat) are the most common bug in generated code. Use these instead of `findOne` + `insert` or read-modify-write:
+
+```ts
+await kv.setnx('order:' + requestId, 1, { ex: 3600 })        // idempotency: true only for the first caller
+
+const lock = await kv.lock('seat:' + id, { waitMs: 2000 })   // mutex on top of setnx
+if (!lock) return { error: 'busy, try again' }
+try { /* … */ } finally { await lock.release() }
+
+// conditional update (optimistic lock): null when the condition no longer holds
+const ok = await seats.updateIf(id, { inc: { left: -1 } }, { left: { $gt: 0 }, status: 'open' })
+
+// find-or-insert, serialized by a lock on the filter
+const { doc, created } = await users.getOrCreate({ email }, { email, name })
+```
+
+Fully atomic on the **platform** driver (Redis `SET NX` / server-side CAS) and consistent on `sqlite` / `memory`; on `edgeone` it is best-effort (Pages Blob has no compare-and-swap).
+
+## CSV export / import
+
+```ts
+import { toCsv, parseCsv } from '@chatu-ai/app-sdk'
+
+const csv = toCsv(docs, { columns: ['title', { key: '_createdAt', label: 'Created', value: d => new Date(d._createdAt).toLocaleString() }] })
+return new Response(csv, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="orders.csv"' } })
+
+const { rows } = parseCsv(await file.text())   // validate each row with zod before insertMany
+```
+
+UTF-8 BOM by default (Excel shows CJK correctly), RFC-4180 quoting both ways.
 
 ## Rate limiting
 

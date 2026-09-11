@@ -105,6 +105,20 @@ export const ENV_PRESETS: Record<string, EnvPreset> = {
     ],
     notes: ['QQ 互联的网站应用要人工审核（通常 1–3 个工作日），审核通过前登录会报 redirect uri is illegal。'],
   },
+  // 技术方案 34 §3：后台第一个管理员——填进来的邮箱登录后隐式拥有 admin 角色
+  admin: {
+    id: 'admin',
+    title: '设置后台管理员',
+    summary: '把你自己的登录邮箱填进来，登录后就能进 /admin 后台；之后可以在后台里给别人授权，不用再改这里。',
+    vars: [
+      { name: 'ADMIN_EMAILS', label: '管理员邮箱，多个用逗号分隔（用哪个邮箱登录就填哪个）', secret: false },
+    ],
+    steps: [
+      { text: '填你登录这个应用时用的邮箱（不是 ChatU 平台账号），多个管理员用逗号分隔' },
+      { text: '保存后用这个邮箱登录应用，就能访问后台了' },
+    ],
+    notes: ['这里的邮箱只决定"谁是管理员"，不会自动创建账号——还是要先在应用里用这个邮箱登录一次。'],
+  },
   // 技术方案 33：不是推荐项——只在用户明确要求"数据放本地 / 用 SQLite"时由 SKILL 发出；缺点必须先讲清
   sqlite: {
     id: 'sqlite',

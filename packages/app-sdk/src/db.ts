@@ -1,5 +1,6 @@
-import { resolveConfig, type EdgeoneConfig, type PlatformConfig } from './config.js'
+import { configVersion, resolveConfig, type EdgeoneConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
+import { getKv } from './kv.js'
 import { edgeoneDb } from './edgeone.js'
 import { sqliteDb } from './sqlite.js'
 
@@ -63,6 +64,21 @@ export interface Collection<T = Record<string, unknown>> {
   findOne(filter?: Filter<T>, options?: Omit<FindOptions<T>, 'filter' | 'limit'>): Promise<Doc<T> | null>
   count(filter?: Filter<T>): Promise<number>
   update(id: string, input: UpdateInput<T>): Promise<Doc<T> | null>
+  /**
+   * 条件更新（乐观锁，技术方案 34 §2）：当前文档满足 ifMatch 才更新，**不满足返回 null**（不是抛错）。
+   * 把"先判断再写"的判断交给服务端，避免并发下超卖/重复处理：
+   * ```ts
+   * const ok = await seats.updateIf(id, { inc: { left: -1 } }, { left: { $gt: 0 }, status: 'open' })
+   * if (!ok) return { error: '名额已满' }
+   * ```
+   * 并发写太密集（重试 5 次仍失败）时抛 AppSdkError('CONFLICT')。
+   */
+  updateIf(id: string, input: UpdateInput<T>, ifMatch: Filter<T>): Promise<Doc<T> | null>
+  /**
+   * 按 filter 找，找不到才插入 doc（技术方案 34 §2）。替代"`findOne` 没有就 `insert`"——后者并发下会插出两条。
+   * 平台 / edgeone 驱动会先取一把同名锁再查再写。
+   */
+  getOrCreate(filter: Filter<T>, doc: Partial<T> & Record<string, unknown>): Promise<{ doc: Doc<T>; created: boolean }>
   replace(id: string, doc: Partial<T> & Record<string, unknown>): Promise<Doc<T>>
   delete(id: string): Promise<boolean>
   deleteMany(filter?: Filter<T>): Promise<number>
@@ -130,6 +146,17 @@ function platformDb(cfg: PlatformConfig): DbClient {
           const r = await call<{ doc: Doc<T> } | null>('PATCH', `${base}/${enc(id)}`, input)
           return r?.doc ?? null
         },
+        async updateIf(id, input, ifMatch) {
+          try {
+            const r = await call<{ doc: Doc<T> } | null>('PATCH', `${base}/${enc(id)}`, { ...input, upsert: false, ifMatch })
+            return r?.doc ?? null
+          } catch (e) {
+            // 条件不满足是正常结果（返回 null）；CONFLICT（重试耗尽）仍然抛出去让调用方重试
+            if (e instanceof AppSdkError && e.code === 'PRECONDITION_FAILED') return null
+            throw e
+          }
+        },
+        getOrCreate(filter, doc) { return getOrCreateWith<T>(this, name, filter, doc) },
         async replace(id, doc) {
           return (await call<{ doc: Doc<T> }>('PUT', `${base}/${enc(id)}`, doc)).doc
         },
@@ -267,6 +294,35 @@ export function applyUpdate<T>(current: Doc<T>, input: UpdateInput<T>): Doc<T> {
   return withMeta<T>(next, current._id, current._createdAt, Date.now())
 }
 
+/** filter 的稳定短哈希（键序无关），用来给 getOrCreate 生成同名锁的键 */
+function stableHash(value: unknown): string {
+  const json = JSON.stringify(value, (_k, v) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : v)
+  let h = 2166136261
+  for (let i = 0; i < (json ?? '').length; i++) { h ^= json!.charCodeAt(i); h = Math.imul(h, 16777619) }
+  return (h >>> 0).toString(36)
+}
+
+/**
+ * getOrCreate 的公共实现：先拿一把 `db:{集合}:{filter 哈希}` 的 kv 锁，让"同一条件"的并发请求串行，锁内查不到才插入。
+ * 单进程驱动（memory / sqlite）同样要锁——await 之间照样会交错，两个请求都查不到就会插出两条。
+ */
+export async function getOrCreateWith<T>(
+  c: Collection<T>, name: string, filter: Filter<T>, doc: Partial<T> & Record<string, unknown>,
+): Promise<{ doc: Doc<T>; created: boolean }> {
+  const lock = await getKv().lock(`db:${name}:${stableHash(filter)}`, { ttlMs: 10_000, waitMs: 3000 })
+  if (!lock) throw new AppSdkError('CONFLICT', `getOrCreate("${name}") 等锁超时，请重试`, 409)
+  try {
+    const found = await c.findOne(filter)
+    if (found) return { doc: found, created: false }
+    return { doc: await c.insert(doc), created: true }
+  } finally {
+    await lock.release()
+  }
+}
+
 // ---------- memory driver ----------
 function memoryDb(): DbClient {
   const store = new Map<string, Map<string, Doc<any>>>()
@@ -308,6 +364,14 @@ function memoryDb(): DbClient {
           m().set(id, next)
           return next
         },
+        async updateIf(id, input, ifMatch) {
+          const cur = m().get(id)
+          if (!cur || !matchesFilter(cur, ifMatch)) return null
+          const next = applyUpdate(cur, input)
+          m().set(id, next)
+          return next
+        },
+        getOrCreate(filter, doc) { return getOrCreateWith<T>(this, name, filter, doc) },
         async replace(id, doc) {
           const cur = m().get(id)
           const saved = withMeta<T>(doc as Record<string, unknown>, id, cur?._createdAt ?? Date.now(), Date.now())
@@ -330,11 +394,12 @@ let cached: { key: string; client: DbClient } | null = null
 
 export function getDb(): DbClient {
   const cfg = resolveConfig()
-  const key =
+  // 并入 configure() 次数：换 fetchImpl / 换配置时重建，不会拿到上一份闭包
+  const key = `${configVersion()}|` + (
     cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}`
     : cfg.kind === 'edgeone' ? `edgeone|${cfg.kvStore}|${cfg.projectId ?? ''}`
     : cfg.kind === 'sqlite' ? `sqlite|${cfg.path}`
-    : 'memory'
+    : 'memory')
   if (!cached || cached.key !== key) {
     cached = {
       key,
