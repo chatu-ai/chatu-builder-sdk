@@ -119,6 +119,30 @@ export const ENV_PRESETS: Record<string, EnvPreset> = {
     ],
     notes: ['这里的邮箱只决定"谁是管理员"，不会自动创建账号——还是要先在应用里用这个邮箱登录一次。'],
   },
+  // 技术方案 38：应用收款——钱直达用户自己的商户号，平台不碰交易资金
+  wxpay: {
+    id: 'wxpay',
+    title: '配置微信支付（收款到你自己的商户号）',
+    summary: '让应用能收微信支付。钱**直接进你自己的微信支付商户号**，平台不经手。需要企业或个体工商户的营业执照——个人自然人办不了商户号。',
+    vars: [
+      { name: 'WXPAY_MCH_ID', label: '商户号（商户平台首页可见，10 位数字）', secret: false },
+      { name: 'WXPAY_APP_ID', label: '与商户号绑定的 AppID（公众号 / 小程序 / 开放平台应用）', secret: false },
+      { name: 'WXPAY_API_V3_KEY', label: 'APIv3 密钥（32 位，商户平台自行设置，只显示一次）', secret: true },
+      { name: 'WXPAY_CERT_SERIAL', label: '商户 API 证书序列号', secret: false },
+      { name: 'WXPAY_PRIVATE_KEY', label: '商户 API 私钥（apiclient_key.pem 全文，含 BEGIN/END 行）', secret: true },
+    ],
+    steps: [
+      { text: '在微信支付商户平台完成注册（企业或个体工商户，需营业执照，审核约 1–2 个工作日）', href: 'https://pay.weixin.qq.com/' },
+      { text: '账户中心 → API 安全：设置 APIv3 密钥（32 位，只显示一次，请自行保存），并申请 API 证书，下载 apiclient_key.pem 与证书序列号' },
+      { text: '产品中心开通「Native 支付」（PC 扫码）和「H5 支付」（手机浏览器）；H5 支付需要填授权域名' },
+      { text: '把商户号、AppID、APIv3 密钥、证书序列号、私钥全文填到下方——回调地址由平台托管，你不需要在商户平台里配' },
+    ],
+    notes: [
+      '微信支付**没有沙箱环境**：预览期下单也是真钱，请用 1 分钱（amount: 1）测试。',
+      '一期没有应用内退款：要退款请到微信支付商户平台，按订单里的「微信交易单号」操作。',
+      '私钥与 APIv3 密钥填进来后会加密保存，应用代码里读不到，也不会进导出的 ZIP。',
+    ],
+  },
   // 技术方案 33：不是推荐项——只在用户明确要求"数据放本地 / 用 SQLite"时由 SKILL 发出；缺点必须先讲清
   sqlite: {
     id: 'sqlite',

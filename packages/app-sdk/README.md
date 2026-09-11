@@ -326,6 +326,21 @@ await ai.setQuota(2000)   // this app may spend at most 2000 points this month; 
 
 Points are the ones actually charged (same source as the bill); `dev` and `prod` are counted separately. Past the cap, AI calls throw `AI_QUOTA_EXCEEDED` (402) while `db` / `kv` / `storage` keep working — pair it with `ratelimit` (per-user throttle) for abuse protection. Model calls made by Builder while generating the app are not counted.
 
+## Payments (WeChat Pay)
+
+Money goes **straight to the app owner's own WeChat Pay merchant account** — the platform only hosts the callback and keeps a payment record. Requires a business license (individuals cannot open a merchant account), and there is **no sandbox**: test with 1 cent.
+
+```ts
+const order = await pay.create({ amount: 1990, subject: '周末营地报名', method: 'native', bizId: signup._id })
+// → { orderId, status: 'pending', codeUrl, h5Url, expiresAt, … }  (amount is in cents)
+
+const o = await pay.getOrder(order.orderId)          // pending | paid | closed (re-checks with WeChat while pending)
+const { orders } = await pay.orders({ status: 'paid' })
+await pay.closeOrder(order.orderId)
+```
+
+Ship goods only when `status === 'paid'`, never on a client-side signal. No in-app refunds in this version — the owner refunds from the merchant console using `transactionId`.
+
 ## Rate limiting
 
 ```ts
