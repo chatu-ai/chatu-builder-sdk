@@ -252,6 +252,27 @@ into anything that runs unattended. Failures throw `AppSdkError` (`AI_VIDEO_FAIL
 `AI_VIDEO_EMPTY`); the state before failure is not charged. Agent-specific knobs (`seed`, `watermark`, `cameraFixed`,
 MiniMaxH3 `referenceVideoUrls`, …) go in `extra`.
 
+## Aggregation (dashboards)
+
+Group and reduce **on the server** — never `find` the whole collection back to reduce it in the app (the 200-per-page cap silently truncates the numbers).
+
+```ts
+const [kpi] = await orders.aggregate({
+  filter: { status: 'paid' },
+  metrics: { n: { $count: true }, total: { $sum: 'amount' }, avg: { $avg: 'amount' }, users: { $countDistinct: 'userId' } },
+})   // → { key: null, n: 128, total: 35600, avg: 278.1, users: 96 }
+
+const byDay = await orders.aggregate({
+  filter: { _createdAt: { $gte: Date.now() - 30 * 86400_000 } },
+  groupBy: { field: '_createdAt', unit: 'day' },   // hour | day | week | month; tzOffsetMinutes defaults to +480 (Asia/Shanghai)
+  metrics: { n: { $count: true }, total: { $sum: 'amount' } },
+})   // → [{ key: '2026-01-01', n: 12, total: 3400 }, …] sorted by key
+
+const top = await orders.aggregate({ groupBy: 'userId', metrics: { total: { $sum: 'amount' } }, sort: { total: -1 }, limit: 10 })
+```
+
+Metrics (`$count` / `$sum` / `$avg` / `$min` / `$max` / `$countDistinct`) always return numbers; non-numeric and missing fields are skipped. Up to 1000 groups per call.
+
 ## Atomic writes
 
 "Check then write" races (duplicate sign-ups, overselling the last seat) are the most common bug in generated code. Use these instead of `findOne` + `insert` or read-modify-write:

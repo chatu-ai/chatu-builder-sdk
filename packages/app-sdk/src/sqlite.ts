@@ -2,7 +2,7 @@ import type { SqliteConfig } from './config.js'
 import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
 import type { KvDriver } from './kv.js'
-import { applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
+import { aggregateDocs, applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
 
 /**
  * 本地 SQLite 驱动（技术方案 33；CHATU_DATA_DRIVER=sqlite）：db 与 kv 落到同一个文件，引擎是 Node 内置 `node:sqlite`（≥ 22.13），零 npm 依赖。
@@ -153,6 +153,10 @@ export function sqliteDb(cfg: SqliteConfig): DbClient {
             return Number(db.prepare('SELECT COUNT(*) AS n FROM docs WHERE collection = ?').get(name)?.n ?? 0)
           }
           return loadAll(db).filter(d => matchesFilter(d, filter)).length
+        },
+        async aggregate(options) {
+          const db = await open(cfg)
+          return aggregateDocs(loadAll(db), options)
         },
         async update(id, input) {
           const db = await open(cfg)

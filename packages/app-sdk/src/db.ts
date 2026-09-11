@@ -55,6 +55,40 @@ export interface UpdateInput<T> {
   upsert?: boolean
 }
 
+/** 聚合的分组键：字段原值（字符串/数字/布尔）、时间桶名，或"没有分组/字段缺失"的 null */
+export type AggregateKey = string | number | boolean | null
+
+/** 聚合指标（都返回数字）：计数、求和、均值、最小、最大、去重计数 */
+export type AggregateMetric =
+  | { $count: true }
+  | { $sum: string }
+  | { $avg: string }
+  | { $min: string }
+  | { $max: string }
+  | { $countDistinct: string }
+
+/** 时间分桶：把毫秒时间戳（或可解析的日期字符串）字段按小时/天/周/月归组 */
+export interface AggregateGroup {
+  field: string
+  unit?: 'hour' | 'day' | 'week' | 'month'
+  /** 时区偏移分钟，**默认 480（北京时间）**；按 UTC 分天传 0 */
+  tzOffsetMinutes?: number
+}
+
+export interface AggregateOptions<T = Record<string, unknown>, M extends Record<string, AggregateMetric> = Record<string, AggregateMetric>> {
+  /** 先筛（与 find 同一套过滤语法） */
+  filter?: Filter<T>
+  /** 分组字段（支持 a.b 点路径）或时间分桶；不传 = 整个集合一行 */
+  groupBy?: string | AggregateGroup
+  metrics: M
+  /** 按指标名或 'key' 排序；默认 { key: 1 } */
+  sort?: Record<string, 1 | -1>
+  /** 返回的分组数，默认 100、上限 1000 */
+  limit?: number
+}
+
+export type AggregateRow<M extends Record<string, AggregateMetric> = Record<string, AggregateMetric>> = { key: AggregateKey } & Record<keyof M, number>
+
 export interface Collection<T = Record<string, unknown>> {
   insert(doc: Partial<T> & Record<string, unknown>): Promise<Doc<T>>
   insertMany(docs: Array<Partial<T> & Record<string, unknown>>): Promise<string[]>
@@ -63,6 +97,17 @@ export interface Collection<T = Record<string, unknown>> {
   /** 取第一条匹配（等价 find({filter, limit:1}).docs[0]） */
   findOne(filter?: Filter<T>, options?: Omit<FindOptions<T>, 'filter' | 'limit'>): Promise<Doc<T> | null>
   count(filter?: Filter<T>): Promise<number>
+  /**
+   * 聚合统计（技术方案 35）：分组在**服务端**完成，只拿回几行——看板/报表别再 `find` 全量回来自己 reduce。
+   * ```ts
+   * const byDay = await orders.aggregate({
+   *   filter: { status: 'paid' },
+   *   groupBy: { field: '_createdAt', unit: 'day' },   // 默认按北京时间分天
+   *   metrics: { n: { $count: true }, total: { $sum: 'amount' } },
+   * })   // → [{ key: '2026-01-01', n: 12, total: 3400 }, …]
+   * ```
+   */
+  aggregate<M extends Record<string, AggregateMetric>>(options: AggregateOptions<T, M>): Promise<AggregateRow<M>[]>
   update(id: string, input: UpdateInput<T>): Promise<Doc<T> | null>
   /**
    * 条件更新（乐观锁，技术方案 34 §2）：当前文档满足 ifMatch 才更新，**不满足返回 null**（不是抛错）。
@@ -141,6 +186,12 @@ function platformDb(cfg: PlatformConfig): DbClient {
         async count(filter) {
           const q = filter ? `?filter=${encodeURIComponent(JSON.stringify(filter))}` : ''
           return (await call<{ count: number }>('GET', `${base}/count${q}`)).count
+        },
+        async aggregate(options) {
+          const r = await call<{ rows: any[] }>('POST', `${base}/aggregate`, {
+            filter: options.filter, groupBy: options.groupBy, metrics: options.metrics, sort: options.sort, limit: options.limit,
+          })
+          return r.rows
         },
         async update(id, input) {
           const r = await call<{ doc: Doc<T> } | null>('PATCH', `${base}/${enc(id)}`, input)
@@ -282,6 +333,121 @@ export function queryDocs<T>(all: Doc<T>[], options?: FindOptions<T>): FindResul
   return { docs: page, total: sorted.length, nextSkip: skip + page.length < sorted.length ? skip + page.length : null }
 }
 
+/** C# 侧用 MidpointRounding.AwayFromZero，这里对齐；只保留 4 位小数，避免 0.1+0.2 那种尾巴 */
+function roundMetric(v: number): number {
+  const sign = v < 0 ? -1 : 1
+  return (sign * Math.round(Math.abs(v) * 1e4)) / 1e4
+}
+
+function aggregateKeyOf(value: unknown): AggregateKey {
+  if (value === null || value === undefined) return null
+  const t = typeof value
+  if (t === 'string' || t === 'number' || t === 'boolean') return value as AggregateKey
+  return JSON.stringify(value)
+}
+
+/** 时间分桶：毫秒时间戳或可解析的日期字符串 → 按 tz 偏移后的桶名（与服务端同格式） */
+function timeBucket(value: unknown, unit: string, tzOffsetMinutes: number): string | null {
+  const ms = typeof value === 'number' ? value : typeof value === 'string' ? Date.parse(value) : NaN
+  if (!Number.isFinite(ms)) return null
+  const d = new Date(ms + tzOffsetMinutes * 60_000)   // 偏移后用 UTC getter 读，等价于"那个时区的本地时间"
+  const p = (n: number) => String(n).padStart(2, '0')
+  const ymd = `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`
+  if (unit === 'month') return ymd.slice(0, 7)
+  if (unit === 'hour') return `${ymd} ${p(d.getUTCHours())}:00`
+  if (unit === 'week') {
+    const monday = new Date(d.getTime() - ((d.getUTCDay() + 6) % 7) * 86_400_000)
+    return `${monday.getUTCFullYear()}-${p(monday.getUTCMonth() + 1)}-${p(monday.getUTCDate())}`
+  }
+  return ymd
+}
+
+function compareAggregate(a: unknown, b: unknown): number {
+  if (a === null || a === undefined) return b === null || b === undefined ? 0 : 1   // null 排后面
+  if (b === null || b === undefined) return -1
+  if (typeof a === 'number' && typeof b === 'number') return a === b ? 0 : a < b ? -1 : 1
+  if (typeof a === 'boolean' && typeof b === 'boolean') return a === b ? 0 : a ? 1 : -1
+  return String(a) < String(b) ? -1 : String(a) === String(b) ? 0 : 1
+}
+
+/** 在一组内存文档上执行 aggregate（memory / sqlite / edgeone 驱动共用，语义与服务端一致） */
+export function aggregateDocs<T, M extends Record<string, AggregateMetric>>(all: Doc<T>[], options: AggregateOptions<T, M>): AggregateRow<M>[] {
+  const metrics = Object.entries(options.metrics ?? {}).map(([name, spec]) => {
+    const [op, arg] = Object.entries(spec ?? {})[0] ?? []
+    if (op === '$count') return { name, op, field: null as string | null }
+    if ((op === '$sum' || op === '$avg' || op === '$min' || op === '$max' || op === '$countDistinct') && typeof arg === 'string' && arg) {
+      return { name, op, field: arg }
+    }
+    throw new AppSdkError('INVALID_METRICS', `aggregate: 不支持的指标 ${name}: ${JSON.stringify(spec)}`, 400)
+  })
+  if (metrics.length === 0) throw new AppSdkError('INVALID_METRICS', 'aggregate: metrics 不能为空', 400)
+
+  const group = typeof options.groupBy === 'string' ? { field: options.groupBy } as AggregateGroup : options.groupBy
+  if (group && !group.field) throw new AppSdkError('INVALID_GROUP_BY', 'aggregate: groupBy.field 不能为空', 400)
+  if (group?.unit && !['hour', 'day', 'week', 'month'].includes(group.unit)) {
+    throw new AppSdkError('INVALID_GROUP_BY', `aggregate: 不支持的时间单位 ${group.unit}`, 400)
+  }
+  const tz = group?.tzOffsetMinutes ?? 480
+
+  interface State { key: AggregateKey; count: number; sum: number[]; n: number[]; min: number[]; max: number[]; distinct: Array<Set<string> | null> }
+  const states = new Map<string, State>()
+  for (const doc of all) {
+    if (options.filter && !matchesFilter(doc, options.filter)) continue
+    let id = '*'
+    let key: AggregateKey = null
+    if (group) {
+      const raw = resolvePath(doc, group.field)
+      key = group.unit ? timeBucket(raw, group.unit, tz) : aggregateKeyOf(raw)
+      id = key === null ? 'null' : `${typeof key}:${key}`   // typeof 不会等于 'null'，不会撞
+    }
+    let st = states.get(id)
+    if (!st) {
+      st = { key, count: 0, sum: metrics.map(() => 0), n: metrics.map(() => 0), min: metrics.map(() => 0), max: metrics.map(() => 0), distinct: metrics.map(() => null) }
+      states.set(id, st)
+    }
+    st.count++
+    metrics.forEach((m, i) => {
+      if (m.op === '$count' || !m.field) return
+      const value = resolvePath(doc, m.field)
+      if (value === null || value === undefined) return
+      if (m.op === '$countDistinct') {
+        (st!.distinct[i] ??= new Set<string>()).add(typeof value === 'string' ? value : JSON.stringify(value))
+        return
+      }
+      if (typeof value !== 'number' || !Number.isFinite(value)) return
+      st!.n[i]!++
+      st!.sum[i]! += value
+      st!.min[i] = st!.n[i] === 1 ? value : Math.min(st!.min[i]!, value)
+      st!.max[i] = st!.n[i] === 1 ? value : Math.max(st!.max[i]!, value)
+    })
+  }
+
+  const rows = [...states.values()].map(st => {
+    const row: Record<string, unknown> = { key: st.key }
+    metrics.forEach((m, i) => {
+      row[m.name] =
+        m.op === '$count' ? st.count
+        : m.op === '$countDistinct' ? (st.distinct[i]?.size ?? 0)
+        : st.n[i] === 0 ? 0
+        : m.op === '$sum' ? roundMetric(st.sum[i]!)
+        : m.op === '$avg' ? roundMetric(st.sum[i]! / st.n[i]!)
+        : m.op === '$min' ? roundMetric(st.min[i]!)
+        : roundMetric(st.max[i]!)
+    })
+    return row as AggregateRow<M>
+  })
+
+  const sortKeys = Object.entries(options.sort ?? { key: 1 })
+  rows.sort((a, b) => {
+    for (const [field, dir] of sortKeys) {
+      const c = compareAggregate((a as Record<string, unknown>)[field], (b as Record<string, unknown>)[field])
+      if (c !== 0) return dir < 0 ? -c : c
+    }
+    return 0
+  })
+  return rows.slice(0, Math.min(Math.max(1, options.limit ?? 100), 1000))
+}
+
 /** 对已有文档应用 set/unset/inc */
 export function applyUpdate<T>(current: Doc<T>, input: UpdateInput<T>): Doc<T> {
   const next: Record<string, unknown> = { ...(current as Record<string, unknown>) }
@@ -354,6 +520,7 @@ function memoryDb(): DbClient {
         async find(options) { return queryDocs([...m().values()], options) },
         async findOne(filter, options) { return (await this.find({ ...options, filter, limit: 1 })).docs[0] ?? null },
         async count(filter) { return [...m().values()].filter(d => matchesFilter(d, filter)).length },
+        async aggregate(options) { return aggregateDocs([...m().values()], options) },
         async update(id, input) {
           const cur = m().get(id)
           if (!cur) {

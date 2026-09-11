@@ -3,7 +3,7 @@ import { optionalImport } from './config.js'
 import { AppSdkError } from './errors.js'
 import type { KvDriver } from './kv.js'
 import type { StorageClient, StorageObject } from './storage.js'
-import { applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
+import { aggregateDocs, applyUpdate, getOrCreateWith, matchesFilter, newDocId, queryDocs, withMeta, type Collection, type DbClient, type Doc } from './db.js'
 
 /**
  * EdgeOne Pages Blob 驱动（部署到 EdgeOne Pages 时使用；kv 与 storage 都落在 Pages Blob）
@@ -240,6 +240,7 @@ export function edgeoneDb(cfg: EdgeoneConfig): DbClient {
         async find(options) { return queryDocs(await all<T>(coll), options) },
         async findOne(filter, options) { return (await this.find({ ...options, filter, limit: 1 })).docs[0] ?? null },
         async count(filter) { return (await this.find({ filter, limit: 200 })).total },
+        async aggregate(options) { return aggregateDocs(await all<T>(coll), options) },
         async update(id, input) {
           const cur = await this.get(id)
           if (!cur) {

@@ -1,6 +1,6 @@
 ---
 name: chatu-db
-description: 平台托管文档集合（@chatu-ai/app-sdk 的 db）。当应用的数据是"一类记录的集合"——待办、文章、订单、评论、报名、库存、客户——需要按条件筛选、排序、分页、统计时使用；含并发安全写法（updateIf / getOrCreate）。比 kv 更合适；仍禁止引入 supabase/prisma/mongoose/mysql 等外部数据库。用户明确要求"用 SQLite / 数据放自己服务器 / 不用平台数据库"时，按本文「平台托管还是本地 SQLite」一节处理（先讲缺点，不主动推荐）。
+description: 平台托管文档集合（@chatu-ai/app-sdk 的 db）。当应用的数据是"一类记录的集合"——待办、文章、订单、评论、报名、库存、客户——需要按条件筛选、排序、分页、统计时使用；含服务端聚合（aggregate：看板 KPI、趋势、分布、Top N）与并发安全写法（updateIf / getOrCreate）。比 kv 更合适；仍禁止引入 supabase/prisma/mongoose/mysql 等外部数据库。用户明确要求"用 SQLite / 数据放自己服务器 / 不用平台数据库"时，按本文「平台托管还是本地 SQLite」一节处理（先讲缺点，不主动推荐）。
 ---
 
 # 文档集合（db）
@@ -137,15 +137,45 @@ for (;;) {
 }
 ```
 
-## 边界与禁忌
+## 统计与看板（aggregate）
 
-- **只在服务端**调用；前端 import 会报错。
-- 单文档 ≤ 256KB；单集合 ≤ 10,000 文档；单应用 ≤ 50 个集合；`limit` ≤ 200。数据量更大时按时间/用户拆分集合。
-- 没有 join / 事务：关联数据存 id，分两次查；计数用 `update(id, { inc: { views: 1 } })`。
-- 查询在服务端全量扫描后过滤，适合万级以内；别在渲染循环里对每条记录再查一次（N+1），先 `find` 一次再在内存里组装。
-- 不要引入外部数据库/ORM，也不要用 `fs` 存 JSON 文件。
-- 字段名不要以 `_` 开头（`_id`/`_createdAt`/`_updatedAt` 是平台保留字段，写入会被忽略/覆盖）。
-- 需要「按语义找相似内容」（知识库问答、相似推荐）时，把向量存进文档的 `embedding` 字段用 `vectorSearch` 检索——见 `chatu-ai` 的 `references/rag.md`；别自己写全表遍历算相似度。
+要"今天多少单 / 按渠道分布 / 最近 30 天趋势 / Top 10"时用 `aggregate`：**分组在服务端算，只返回几行**。
+
+```ts
+// ① KPI 卡片：不分组 = 一行
+const [kpi] = await orders.aggregate({
+  filter: { status: 'paid' },
+  metrics: { n: { $count: true }, total: { $sum: 'amount' }, avg: { $avg: 'amount' }, users: { $countDistinct: 'userId' } },
+});                       // { key: null, n: 128, total: 35600, avg: 278.1, users: 96 }
+
+// ② 按天趋势（折线图）：默认按北京时间分桶，key 形如 '2026-01-01'
+const byDay = await orders.aggregate({
+  filter: { _createdAt: { $gte: Date.now() - 30 * 86400_000 } },
+  groupBy: { field: '_createdAt', unit: 'day' },
+  metrics: { n: { $count: true }, total: { $sum: 'amount' } },
+});                       // 已按 key 升序，直接喂 recharts
+
+// ③ 按状态分布（饼图）
+const byStatus = await orders.aggregate({ groupBy: 'status', metrics: { n: { $count: true } } });
+
+// ④ Top N（排行榜）
+const top = await orders.aggregate({
+  groupBy: 'userId',
+  metrics: { total: { $sum: 'amount' } },
+  sort: { total: -1 },
+  limit: 10,
+});
+```
+
+| 项 | 说明 |
+| --- | --- |
+| 指标 | `$count` / `$sum` / `$avg` / `$min` / `$max` / `$countDistinct`，**都返回数字**；非数值与缺失字段自动跳过 |
+| 分组 | 字段名（支持 `a.b` 点路径）或 `{ field, unit: 'hour'\|'day'\|'week'\|'month', tzOffsetMinutes }`；不传 = 整个集合一行 |
+| 时区 | 时间分桶**默认 +480（北京时间）**——这正是用户要的"今天"；要 UTC 传 `tzOffsetMinutes: 0` |
+| 排序 | 默认 `{ key: 1 }`（趋势图要的顺序）；排行榜传 `sort: { 指标名: -1 }` |
+| 上限 | 返回分组数默认 100、最大 1000；扫描范围是整个集合（≤1 万条） |
+
+**禁止**把数据 `find` 回来自己 `reduce` 做统计——会被 `limit`（单页 200）截断算错，还多花好几次调用的点数。需要图表页的完整代码见 `references/dashboard.md`。
 
 ## 并发与唯一性（重要）
 
@@ -180,6 +210,17 @@ if (!saved) return { error: '这条记录刚被别人改过，请刷新后重试
 - 计数器单纯要加减用 `update(id, { inc: { views: 1 } })` 就够（`inc` 本身是原子的），要"够了才扣"才用 `updateIf`。
 - 纯粹的"同一次提交只处理一次"（防重复下单、回调幂等）用 `kv.setnx`；需要把一段读写整体串起来用 `kv.lock`，见 `chatu-kv`。
 - EdgeOne 存储驱动下这些只是 best-effort（Blob 没有原子写）；要严格唯一就用平台托管。
+
+## 边界与禁忌
+
+- **只在服务端**调用；前端 import 会报错。
+- 单文档 ≤ 256KB；单集合 ≤ 10,000 文档；单应用 ≤ 50 个集合；`limit` ≤ 200。数据量更大时按时间/用户拆分集合。
+- 没有 join / 事务：关联数据存 id，分两次查；计数用 `update(id, { inc: { views: 1 } })`。
+- 查询在服务端全量扫描后过滤，适合万级以内；别在渲染循环里对每条记录再查一次（N+1），先 `find` 一次再在内存里组装。
+- 统计用 `aggregate`，不要 `find` 全量回来自己 `reduce`（会被 limit 截断、也更慢）。
+- 不要引入外部数据库/ORM，也不要用 `fs` 存 JSON 文件。
+- 字段名不要以 `_` 开头（`_id`/`_createdAt`/`_updatedAt` 是平台保留字段，写入会被忽略/覆盖）。
+- 需要「按语义找相似内容」（知识库问答、相似推荐）时，把向量存进文档的 `embedding` 字段用 `vectorSearch` 检索——见 `chatu-ai` 的 `references/rag.md`；别自己写全表遍历算相似度。
 
 ## 平台托管还是本地 SQLite
 
@@ -217,4 +258,7 @@ if (!saved) return { error: '这条记录刚被别人改过，请刷新后重试
 | 名额/库存扣成负数，或计数对不上 | 先 `get` 再 `update` 覆盖写 | 改用 `updateIf` 带条件，或纯加减用 `inc` |
 | `updateIf` 一直返回 null | 条件本身不成立（如版本号已变、状态已流转） | 这是正常结果：重新读一次再判断，并给用户提示，别重试到死 |
 | `CONFLICT` | 同一条记录并发写太密集，服务端重试 5 次仍冲突 | 让这次请求失败并提示重试；高频计数改用 `kv.incr` |
+| 统计数字比实际少 | 用 `find` 拉回来自己算，被 `limit`（默认 50、上限 200）截断 | 改用 `aggregate`（服务端全量分组） |
+| "今天"的数字对不上（差 8 小时） | 时间分桶按 UTC 算了 | 时间分桶默认就是北京时间；显式传了 `tzOffsetMinutes: 0` 的去掉 |
+| `INVALID_METRICS` / `INVALID_GROUP_BY` | 用了不支持的指标（如 `$median`）或时间单位（如 `quarter`） | 只有 `$count/$sum/$avg/$min/$max/$countDistinct` 与 `hour/day/week/month` |
 | `SQLITE_UNAVAILABLE` | 配了 `CHATU_DATA_DRIVER=sqlite` 但运行环境 Node < 22.13 | 升级 Node，或删掉该变量改回平台托管 |
