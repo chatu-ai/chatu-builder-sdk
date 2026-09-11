@@ -82,6 +82,8 @@ export function byoStorage(cfg: ByoConfig, fallback: StorageClient): StorageClie
       const { s3, presign } = await load()
       return presign.getSignedUrl(await client(), new s3.GetObjectCommand({ Bucket: s3cfg.bucket, Key: K(key), ResponseContentDisposition: opts?.downloadName ? `attachment; filename="${encodeURIComponent(opts.downloadName)}"` : undefined }), { expiresIn: opts?.expiresIn ?? 600 })
     },
+    // 这些驱动没有缩放能力：返回原图地址，页面照常显示（技术方案 37）
+    async thumbnail(key, opts) { return this.url(key, { expiresIn: opts?.expiresIn }) },
     async head(key) {
       const { s3 } = await load()
       try {

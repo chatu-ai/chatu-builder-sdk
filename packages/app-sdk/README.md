@@ -15,6 +15,14 @@ const { url } = await storage.uploadUrl('uploads/big.mp4', { contentType: 'video
 const src = await storage.url('avatars/u1.png', { expiresIn: 3600 })         // temporary link for <img src>
 ```
 
+Thumbnails are generated once and cached in the store, so the returned URL is a plain presigned GET (CDN-friendly, no function in the hot path):
+
+```ts
+const src = await storage.thumbnail('uploads/a.jpg', { width: 320, height: 320 })  // fit: 'cover' | 'contain', format: 'webp' | 'jpeg' | 'png'
+```
+
+Only the **platform** driver actually resizes (ImageSharp, ≤2048px, source ≤20MB); memory / edgeone / byo return the original URL so pages still render.
+
 | Env | Driver | Notes |
 | --- | --- | --- |
 | `CHATU_DATA_URL` + `CHATU_APP_KEY` (+ `CHATU_DATA_ENV=dev\|prod`) | **platform** — ChatU hosted Data API, metered | set automatically in the Builder preview; copy from the publish panel for your own server |

@@ -168,6 +168,8 @@ export function edgeoneStorage(cfg: EdgeoneConfig): StorageClient {
       const q = opts?.downloadName ? `?download=${encodeURIComponent(opts.downloadName)}` : ''
       return `${cfg.publicPathPrefix}/${enc(key)}${q}`
     },
+    // 这些驱动没有缩放能力：返回原图地址，页面照常显示（技术方案 37）
+    async thumbnail(key, opts) { return this.url(key, { expiresIn: opts?.expiresIn }) },
     head,
     async delete(key) {
       const s = await store()

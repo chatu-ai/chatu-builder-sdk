@@ -1,4 +1,4 @@
-import { resolveConfig, type PlatformConfig } from './config.js'
+import { configVersion, resolveConfig, type PlatformConfig } from './config.js'
 import { edgeoneStorage } from './edgeone.js'
 import { AppSdkError } from './errors.js'
 import { byoStorage } from './byo.js'
@@ -6,6 +6,20 @@ import { byoStorage } from './byo.js'
 export interface StorageObject { key: string; size: number; lastModified?: string | null }
 export interface StorageListResult { items: StorageObject[]; nextCursor: string | null }
 export interface UploadUrlResult { url: string; method: 'PUT'; expiresIn: number; headers?: Record<string, string> }
+
+export interface ThumbnailOptions {
+  /** 目标宽（像素，≤2048）；与 height 至少给一个，只给一边时按原图比例算另一边 */
+  width?: number
+  height?: number
+  /** cover = 裁切填满给定框（默认，适合方形头像/卡片）；contain = 完整装下 */
+  fit?: 'cover' | 'contain'
+  /** 输出格式，默认 webp（体积最小、保留透明）；要兼容极老环境用 jpeg */
+  format?: 'webp' | 'jpeg' | 'png'
+  /** 返回地址的有效期（秒） */
+  expiresIn?: number
+  /** 覆盖了同名原图时传 true 强制重新生成 */
+  refresh?: boolean
+}
 
 export interface StorageClient {
   /** 服务端小文件直传（≤5MB） */
@@ -16,6 +30,15 @@ export interface StorageClient {
   get(key: string): Promise<Uint8Array | null>
   /** 临时访问地址（默认 10 分钟；可指定秒数、下载文件名）—— 用于 <img src> / 下载链接 */
   url(key: string, opts?: { expiresIn?: number; downloadName?: string }): Promise<string>
+  /**
+   * 缩略图地址（技术方案 37）：按尺寸生成一次并缓存在存储里，之后都是直接的临时地址。
+   * 列表页 / 头像 / 相册**一律用它**，别挂原图——用户手机拍的照片动辄几 MB。
+   * ```tsx
+   * <img src={await storage.thumbnail(key, { width: 320, height: 320 })} />
+   * ```
+   * 只有平台托管驱动会真缩放；memory / edgeone / byo 返回原图地址（页面照常显示，只是没变小）。
+   */
+  thumbnail(key: string, opts?: ThumbnailOptions): Promise<string>
   head(key: string): Promise<StorageObject | null>
   delete(key: string): Promise<void>
   list(prefix?: string, opts?: { cursor?: string | null; limit?: number }): Promise<StorageListResult>
@@ -63,6 +86,13 @@ function platformStorage(cfg: PlatformConfig): StorageClient {
       const r = await json<{ url: string }>('POST', '/sign', { key, expiresIn: opts?.expiresIn, downloadName: opts?.downloadName })
       return r.url
     },
+    async thumbnail(key, opts) {
+      const r = await json<{ url: string }>('POST', '/thumb', {
+        key, width: opts?.width, height: opts?.height, fit: opts?.fit, format: opts?.format,
+        expiresIn: opts?.expiresIn, refresh: opts?.refresh,
+      })
+      return r.url
+    },
     async head(key) {
       const res = await cfg.fetchImpl(`${cfg.baseUrl}/storage/${enc(key)}?meta=1`, { headers: base })
       if (res.status === 404) return null
@@ -88,6 +118,8 @@ function memoryStorage(): StorageClient {
     async uploadUrl(key) { return { url: `memory://${key}`, method: 'PUT', expiresIn: 0 } },
     async get(key) { return store.get(key)?.bytes ?? null },
     async url(key) { const e = store.get(key); if (!e) return `memory://${key}`; const b64 = btoa(String.fromCharCode(...e.bytes)); return `data:${e.contentType ?? 'application/octet-stream'};base64,${b64}` },
+    // 这些驱动没有缩放能力：返回原图地址，页面照常显示（技术方案 37）
+    async thumbnail(key, opts) { return this.url(key, { expiresIn: opts?.expiresIn }) },
     async head(key) { const e = store.get(key); return e ? { key, size: e.bytes.byteLength, lastModified: e.at } : null },
     async delete(key) { store.delete(key) },
     async list(prefix = '', opts) {
@@ -106,7 +138,8 @@ export function getStorage(): StorageClient {
   const cfg = resolveConfig()
   // sqlite 驱动没有文件存储：有平台配置就走平台，否则退内存（技术方案 33）
   const platform = cfg.kind === 'platform' ? cfg : cfg.kind === 'sqlite' ? cfg.platform : null
-  const key = platform ? `platform|${platform.baseUrl}|${platform.env}|${platform.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.storageStore}|${cfg.projectId ?? ''}` : 'memory'
+  // 并入 configure() 次数：换 fetchImpl / 换配置时重建（与 kv / db / auth 同规则）
+  const key = `${configVersion()}|` + (platform ? `platform|${platform.baseUrl}|${platform.env}|${platform.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.storageStore}|${cfg.projectId ?? ''}` : 'memory')
   if (!cached || cached.key !== key) cached = { key, client: platform ? platformStorage(platform) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : cfg.kind === 'edgeone' ? edgeoneStorage(cfg) : memoryStorage() }
   return cached.client
 }
@@ -116,6 +149,7 @@ export const storage: StorageClient = {
   uploadUrl: (k, o) => getStorage().uploadUrl(k, o),
   get: (k) => getStorage().get(k),
   url: (k, o) => getStorage().url(k, o),
+  thumbnail: (k, o) => getStorage().thumbnail(k, o),
   head: (k) => getStorage().head(k),
   delete: (k) => getStorage().delete(k),
   list: (p, o) => getStorage().list(p, o),
