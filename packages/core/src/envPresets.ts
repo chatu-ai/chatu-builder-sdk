@@ -105,6 +105,25 @@ export const ENV_PRESETS: Record<string, EnvPreset> = {
     ],
     notes: ['QQ 互联的网站应用要人工审核（通常 1–3 个工作日），审核通过前登录会报 redirect uri is illegal。'],
   },
+  // 技术方案 33：不是推荐项——只在用户明确要求"数据放本地 / 用 SQLite"时由 SKILL 发出；缺点必须先讲清
+  sqlite: {
+    id: 'sqlite',
+    title: '改用本地 SQLite 数据库',
+    summary: '应用的数据库与 KV 改存到应用目录下的一个 SQLite 文件（默认 ./data/chatu.sqlite），不再使用平台托管的数据库。适合自己用 Docker / 服务器部署、数据量不大的场景。',
+    vars: [
+      { name: 'CHATU_DATA_DRIVER', label: '填 sqlite（改回平台托管时删掉这个变量即可）', secret: false },
+      { name: 'CHATU_SQLITE_PATH', label: '可选，数据库文件路径，默认 ./data/chatu.sqlite', secret: false, required: false },
+    ],
+    steps: [
+      { text: '在下方 CHATU_DATA_DRIVER 里填 sqlite 并保存；代码不用改，重启预览后生效' },
+    ],
+    notes: [
+      '不能一键部署到 EdgeOne Pages / 云函数：它们没有持久磁盘，SQLite 文件每次冷启动都是空的。选了 SQLite 只能用 Docker、自己的服务器或本机运行。',
+      '数据跟着文件走：预览期数据在沙箱的 data/ 目录里，不进 Git、不进导出 ZIP、不进部署产物；没有 dev→prod 数据复制、没有发布面板里的数据浏览；备份与迁移要自己做，删除会话或沙箱回收后数据就没了。',
+      '只接管数据库与 KV：登录（应用用户）、文件存储、AI 仍然走平台，导出后不配 CHATU_DATA_URL / CHATU_APP_KEY 就没有登录与 AI。',
+      '单机单实例，多副本各存各的；沙箱工作区是网络盘，写性能一般，只适合几千到几万条的小数据。',
+    ],
+  },
 }
 
 export function getEnvPreset(id: string | undefined | null): EnvPreset | undefined {

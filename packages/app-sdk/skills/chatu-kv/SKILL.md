@@ -122,6 +122,7 @@ export async function POST(req: Request) {
 - `list()` 是按前缀扫描，别在热路径上对上万条数据做全量 `list`+`mget`；分页展示时用 `limit` + `nextCursor`。
 - 没有事务/多键原子操作；计数器用 `incr` 而不是 `get` 后 `set`。
 - 不要引入 redis/ioredis 客户端——`kv` 已经是托管服务。
+- 用户明确要求改用本地 SQLite 时（见 `chatu-db` 的「平台托管还是本地 SQLite」，不主动推荐），`kv` 随 `CHATU_DATA_DRIVER=sqlite` 一起落到同一个文件，API 不变。
 - 计数/限流不要用 `get` 后 `set`（会丢计数）；用 `incr` 或 `ratelimit`。
 
 ## 常见错误

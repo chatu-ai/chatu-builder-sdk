@@ -104,8 +104,10 @@ let cached: { key: string; client: StorageClient } | null = null
 
 export function getStorage(): StorageClient {
   const cfg = resolveConfig()
-  const key = cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.storageStore}|${cfg.projectId ?? ''}` : 'memory'
-  if (!cached || cached.key !== key) cached = { key, client: cfg.kind === 'platform' ? platformStorage(cfg) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : cfg.kind === 'edgeone' ? edgeoneStorage(cfg) : memoryStorage() }
+  // sqlite 驱动没有文件存储：有平台配置就走平台，否则退内存（技术方案 33）
+  const platform = cfg.kind === 'platform' ? cfg : cfg.kind === 'sqlite' ? cfg.platform : null
+  const key = platform ? `platform|${platform.baseUrl}|${platform.env}|${platform.apiKey.slice(-4)}` : cfg.kind === 'byo' ? `byo|${cfg.s3?.bucket ?? ''}|${cfg.s3?.prefix ?? ''}` : cfg.kind === 'edgeone' ? `edgeone|${cfg.storageStore}|${cfg.projectId ?? ''}` : 'memory'
+  if (!cached || cached.key !== key) cached = { key, client: platform ? platformStorage(platform) : cfg.kind === 'byo' ? byoStorage(cfg, memoryStorage()) : cfg.kind === 'edgeone' ? edgeoneStorage(cfg) : memoryStorage() }
   return cached.client
 }
 

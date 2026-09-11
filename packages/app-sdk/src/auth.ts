@@ -414,14 +414,16 @@ let cached: { key: string; client: AuthClient } | null = null
 /** 按当前配置取 auth 客户端（惰性、缓存；configure() 后自动重建） */
 export function getAuth(): AuthClient {
   const cfg = resolveConfig()
+  // sqlite 驱动只接管 db / kv：有平台配置时 auth 照常走平台（技术方案 33）
+  const platform = cfg.kind === 'platform' ? cfg : cfg.kind === 'sqlite' ? cfg.platform : null
   // 两种驱动都带进程内状态（platform 的会话缓存 / memory 的用户表）：并入 configure() 次数，重新配置即重建
-  const key = cfg.kind === 'platform'
-    ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}|${cfg.authSessionCacheSeconds}|${cfg.authMode}|${configVersion()}`
+  const key = platform
+    ? `platform|${platform.baseUrl}|${platform.env}|${platform.apiKey.slice(-4)}|${platform.authSessionCacheSeconds}|${platform.authMode}|${configVersion()}`
     : `${cfg.kind}|${resolveAuthMode()}|${configVersion()}`
   if (!cached || cached.key !== key) {
     cached = {
       key,
-      client: cfg.kind === 'platform' ? platformAuth(cfg)
+      client: platform ? platformAuth(platform)
         : cfg.kind === 'memory' ? memoryAuth(resolveAuthMode() === 'channel')
           : unsupportedAuth(cfg.kind),
     }

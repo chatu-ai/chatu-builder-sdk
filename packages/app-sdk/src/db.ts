@@ -1,10 +1,11 @@
 import { resolveConfig, type EdgeoneConfig, type PlatformConfig } from './config.js'
 import { AppSdkError } from './errors.js'
 import { edgeoneDb } from './edgeone.js'
+import { sqliteDb } from './sqlite.js'
 
 /**
  * 文档集合（技术方案 19）：比 kv 更适合"列表 + 条件查询 + 排序分页"的业务数据。
- * 平台托管（platform）走 Data API `/data/v1/db/*`；edgeone 用 Pages Blob 每文档一个对象；memory 为本地降级。
+ * 平台托管（platform）走 Data API `/data/v1/db/*`；edgeone 用 Pages Blob 每文档一个对象；sqlite 落本地文件（技术方案 33）；memory 为本地降级。
  * 只能在服务端使用。
  */
 
@@ -332,6 +333,7 @@ export function getDb(): DbClient {
   const key =
     cfg.kind === 'platform' ? `platform|${cfg.baseUrl}|${cfg.env}|${cfg.apiKey.slice(-4)}`
     : cfg.kind === 'edgeone' ? `edgeone|${cfg.kvStore}|${cfg.projectId ?? ''}`
+    : cfg.kind === 'sqlite' ? `sqlite|${cfg.path}`
     : 'memory'
   if (!cached || cached.key !== key) {
     cached = {
@@ -339,6 +341,7 @@ export function getDb(): DbClient {
       client:
         cfg.kind === 'platform' ? platformDb(cfg)
         : cfg.kind === 'edgeone' ? edgeoneDb(cfg as EdgeoneConfig)
+        : cfg.kind === 'sqlite' ? sqliteDb(cfg)
         : memoryDb(),
     }
   }

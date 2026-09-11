@@ -25,3 +25,4 @@ export type { RankOptions, Ranked, VectorSearchOptions, SplitTextOptions } from 
 export { validateWith, isStandardSchema } from './schema.js'
 export type { StandardSchemaV1 } from './schema.js'
 export { encodeKvKey, decodeKvKey } from './edgeone.js'
+export { forgetSqlite } from './sqlite.js'

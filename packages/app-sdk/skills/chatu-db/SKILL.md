@@ -1,6 +1,6 @@
 ---
 name: chatu-db
-description: 平台托管文档集合（@chatu-ai/app-sdk 的 db）。当应用的数据是"一类记录的集合"——待办、文章、订单、评论、报名、库存、客户——需要按条件筛选、排序、分页、统计时使用。比 kv 更合适；仍禁止引入 supabase/prisma/mongoose/mysql 等外部数据库。
+description: 平台托管文档集合（@chatu-ai/app-sdk 的 db）。当应用的数据是"一类记录的集合"——待办、文章、订单、评论、报名、库存、客户——需要按条件筛选、排序、分页、统计时使用。比 kv 更合适；仍禁止引入 supabase/prisma/mongoose/mysql 等外部数据库。用户明确要求"用 SQLite / 数据放自己服务器 / 不用平台数据库"时，按本文「平台托管还是本地 SQLite」一节处理（先讲缺点，不主动推荐）。
 ---
 
 # 文档集合（db）
@@ -143,6 +143,29 @@ for (;;) {
 - 字段名不要以 `_` 开头（`_id`/`_createdAt`/`_updatedAt` 是平台保留字段，写入会被忽略/覆盖）。
 - 需要「按语义找相似内容」（知识库问答、相似推荐）时，把向量存进文档的 `embedding` 字段用 `vectorSearch` 检索——见 `chatu-ai` 的 `references/rag.md`；别自己写全表遍历算相似度。
 
+## 平台托管还是本地 SQLite
+
+**默认且推荐：平台托管**——预览/线上两套数据、发布面板可看可复制、一键部署自动带上、有配额保护。**不要主动提"可以换 SQLite"**，不要把它当成省钱/更快/更简单的选项去介绍。
+
+只有用户**自己明确说**"用 SQLite""数据要放我自己服务器/本地""不想用你们的数据库/不想计费"时才走下面的流程：
+
+1. **先把缺点讲清楚，再动手**。可以直接复述这段：
+
+   > 可以改用本地 SQLite（数据库和 KV 存到应用目录下的一个文件），代码不用改。但要先说明几点：① **不能一键部署到 EdgeOne Pages 和云函数**——它们没有持久磁盘，只能用 Docker、你自己的服务器或本机运行；② **数据跟着文件走**——预览期的数据在沙箱的 `data/` 目录里，不进 Git、不进导出 ZIP、不进部署产物，没有 dev→prod 数据复制和发布面板的数据浏览，备份迁移要自己做，删除会话后数据就没了；③ **登录、文件存储、AI 仍然依赖平台**，导出后要另配 `CHATU_DATA_URL` / `CHATU_APP_KEY`；④ **单机单实例**，写性能一般，只适合几万条以内的小数据。确认要换吗？
+
+2. 用户确认后，在回复正文里发一个 ```` ```chatu-env ```` 块（Builder 渲染成配置卡片，用户填好点"继续"后你才会收到后续消息），**发完块就停**：
+
+   ````md
+   ```chatu-env
+   { "preset": "sqlite", "vars": ["CHATU_DATA_DRIVER"], "resume": "已改成本地 SQLite，请继续" }
+   ```
+   ````
+
+3. 用户回来后**代码一行不用改**：`db` / `kv` 的 API 与语义完全相同（换驱动 = 一个环境变量）。检查 `.chatu/env-names.json` 里有 `CHATU_DATA_DRIVER` 即视为已切换。
+4. 之后用户要发布时，只能走「导出 ZIP」（Docker，`DEPLOY.md` 有 SQLite 一节）或「推送到 Git 仓库」；选 EdgeOne / 云函数时要提醒他线上不会用 SQLite（见 `chatu-deploy`）。用户想改回平台托管：让他在「环境变量」面板删掉 `CHATU_DATA_DRIVER`。
+
+禁止：`import 'node:sqlite'`、装 `better-sqlite3` / `sqlite3` / `sql.js`、自己写 SQL、直接读写 `data/*.sqlite` 文件——一律通过 `db` / `kv`，否则应用就回不到平台托管了。
+
 ## 常见错误
 
 | 现象 | 原因 | 修法 |
@@ -152,3 +175,4 @@ for (;;) {
 | 列表只有 50 条 | `limit` 默认 50 | 传 `limit`（≤200）并用 `nextSkip` 翻页 |
 | 排序结果不对 | 字段类型混用（字符串与数字混存） | 统一字段类型；时间用毫秒时间戳数字 |
 | `DOC_QUOTA_EXCEEDED` | 单集合超过 1 万条 | 归档旧数据（`deleteMany`）或按月/按用户拆集合 |
+| `SQLITE_UNAVAILABLE` | 配了 `CHATU_DATA_DRIVER=sqlite` 但运行环境 Node < 22.13 | 升级 Node，或删掉该变量改回平台托管 |

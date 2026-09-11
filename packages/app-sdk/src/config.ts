@@ -1,10 +1,11 @@
 /**
- * 驱动选择（技术方案 15 §1）：
+ * 驱动选择（技术方案 15 §1、33）：
  * - CHATU_DATA_URL + CHATU_APP_KEY（或 CHATU_CUSTOMER_API_KEY）→ platform（平台托管 Data API，开发期/线上都可用，按用量计费）
+ * - CHATU_DATA_DRIVER=sqlite → sqlite（db / kv 落本地 SQLite 文件；auth / storage / ai 在有平台配置时仍走平台）
  * - 都没有 → memory（进程内存，重启即丢；本地开发/无配置降级）
  * 只在服务端使用（Route Handler / Server Component / Server Action）；密钥不得暴露给浏览器。
  */
-export type DriverKind = 'platform' | 'byo' | 'memory' | 'edgeone'
+export type DriverKind = 'platform' | 'byo' | 'memory' | 'edgeone' | 'sqlite'
 
 /**
  * 应用的登录模式（技术方案 23）：
@@ -61,7 +62,20 @@ export interface EdgeoneConfig {
   /** 应用内代理读取路由前缀（storage.url() 返回 `${publicPathPrefix}/<key>`；模板内置 /_chatu/blob） */
   publicPathPrefix: string
 }
-export type ResolvedConfig = PlatformConfig | ByoConfig | MemoryConfig | EdgeoneConfig
+/**
+ * 本地 SQLite（技术方案 33；CHATU_DATA_DRIVER=sqlite）：db 与 kv 落到同一个 SQLite 文件，用 Node 内置 `node:sqlite`（≥ 22.13），零依赖。
+ * 只适合单机单实例（Docker / 自己的服务器 / 本机），不能部署到 EdgeOne Pages / 云函数（无持久磁盘）。
+ * 同时配了 CHATU_DATA_URL + CHATU_APP_KEY 时 `platform` 非空：auth / storage / ai 继续走平台。
+ */
+export interface SqliteConfig {
+  kind: 'sqlite'
+  /** 数据库文件路径（相对进程 cwd）：CHATU_SQLITE_PATH，默认 ./data/chatu.sqlite；父目录不存在时自动创建 */
+  path: string
+  platform: PlatformConfig | null
+}
+export type ResolvedConfig = PlatformConfig | ByoConfig | MemoryConfig | EdgeoneConfig | SqliteConfig
+
+export const DEFAULT_SQLITE_PATH = './data/chatu.sqlite'
 
 export interface ConfigureOptions {
   baseUrl?: string
@@ -83,6 +97,8 @@ export interface ConfigureOptions {
   authSessionCacheSeconds?: number
   /** 登录模式（默认 app；channel = 用渠道账号登录，不提供注册） */
   authMode?: AuthMode
+  /** sqlite 驱动的数据库文件路径（默认 ./data/chatu.sqlite） */
+  sqlitePath?: string
 }
 
 /** 平台开放的 embedding 模型之一（服务端白名单：text-embedding-3-small / 3-large / ada-002） */
@@ -113,9 +129,16 @@ export function resolveConfig(): ResolvedConfig {
   const envDriver = (env.CHATU_DATA_DRIVER ?? '').toLowerCase()
   const driver: DriverKind =
     override.driver ??
-    (envDriver === 'edgeone' || envDriver === 'byo' || envDriver === 'memory' || envDriver === 'platform'
+    (envDriver === 'edgeone' || envDriver === 'byo' || envDriver === 'memory' || envDriver === 'platform' || envDriver === 'sqlite'
       ? (envDriver as DriverKind)
       : baseUrl && apiKey ? 'platform' : redisUrl || s3Bucket ? 'byo' : 'memory')
+  if (driver === 'sqlite') {
+    return {
+      kind: 'sqlite',
+      path: (override.sqlitePath ?? env.CHATU_SQLITE_PATH ?? '').trim() || DEFAULT_SQLITE_PATH,
+      platform: baseUrl && apiKey ? buildPlatformConfig(env, baseUrl, apiKey) : null,
+    }
+  }
   if (driver === 'edgeone') {
     return {
       kind: 'edgeone',
@@ -146,24 +169,28 @@ export function resolveConfig(): ResolvedConfig {
   }
   if (driver === 'platform') {
     if (!baseUrl || !apiKey) throw new Error('@chatu-ai/app-sdk: platform driver requires CHATU_DATA_URL and CHATU_APP_KEY')
-    const dataEnv = (override.env ?? env.CHATU_DATA_ENV ?? 'dev').toLowerCase() === 'prod' ? 'prod' : 'dev'
-    const normalizedBase = baseUrl.replace(/\/+$/, '')
-    return {
-      kind: 'platform',
-      baseUrl: normalizedBase,
-      apiKey,
-      env: dataEnv,
-      fetchImpl: override.fetchImpl ?? fetch,
-      aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
-      aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
-      aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
-      aiImageAgent: override.imageAgent ?? env.CHATU_AI_IMAGE_AGENT,
-      aiVideoAgent: override.videoAgent ?? env.CHATU_AI_VIDEO_AGENT,
-      authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
-      authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
-    }
+    return buildPlatformConfig(env, baseUrl, apiKey)
   }
   return { kind: 'memory' }
+}
+
+/** 平台配置（platform 驱动本体；sqlite 等驱动下 auth / storage / ai 也用它继续走平台） */
+function buildPlatformConfig(env: Record<string, string | undefined>, baseUrl: string, apiKey: string): PlatformConfig {
+  const normalizedBase = baseUrl.replace(/\/+$/, '')
+  return {
+    kind: 'platform',
+    baseUrl: normalizedBase,
+    apiKey,
+    env: (override.env ?? env.CHATU_DATA_ENV ?? 'dev').toLowerCase() === 'prod' ? 'prod' : 'dev',
+    fetchImpl: override.fetchImpl ?? fetch,
+    aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
+    aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
+    aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
+    aiImageAgent: override.imageAgent ?? env.CHATU_AI_IMAGE_AGENT,
+    aiVideoAgent: override.videoAgent ?? env.CHATU_AI_VIDEO_AGENT,
+    authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
+    authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
+  }
 }
 
 /** 会话缓存秒数：非法值回落到默认 30，上限 300（避免停用用户长时间仍可用） */
@@ -195,9 +222,12 @@ export function deriveAiBaseUrl(dataBaseUrl: string): string {
 }
 
 /** 当前生效的驱动与环境（诊断用，不含密钥） */
-export function describe(): { driver: DriverKind; env?: 'dev' | 'prod'; baseUrl?: string; kv?: string; storage?: string; db?: string } {
+export function describe(): { driver: DriverKind; env?: 'dev' | 'prod'; baseUrl?: string; kv?: string; storage?: string; db?: string; auth?: string } {
   const c = resolveConfig()
   if (c.kind === 'platform') return { driver: 'platform', env: c.env, baseUrl: c.baseUrl }
+  if (c.kind === 'sqlite') {
+    return { driver: 'sqlite', env: c.platform?.env, baseUrl: c.platform?.baseUrl, db: `sqlite:${c.path}`, kv: `sqlite:${c.path}`, storage: c.platform ? 'platform' : 'memory', auth: c.platform ? 'platform' : 'unsupported' }
+  }
   if (c.kind === 'byo') return { driver: 'byo', kv: c.redisUrl ? 'redis' : 'memory', storage: c.s3 ? 's3' : 'memory' }
   if (c.kind === 'edgeone') return { driver: 'edgeone', kv: `blob:${c.kvStore}`, storage: `blob:${c.storageStore}`, db: `blob:${c.kvStore}/db` }
   return { driver: 'memory' }
@@ -209,26 +239,13 @@ export function describe(): { driver: DriverKind; env?: 'dev' | 'prod'; baseUrl?
 export function resolveAiConfig(): PlatformConfig | null {
   const c = resolveConfig()
   if (c.kind === 'platform') return c
+  if (c.kind === 'sqlite') return c.platform
   const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
   const env: Record<string, string | undefined> = proc?.env ?? {}
   const baseUrl = override.baseUrl ?? env.CHATU_DATA_URL
   const apiKey = override.apiKey ?? env.CHATU_APP_KEY ?? env.CHATU_CUSTOMER_API_KEY
   if (!baseUrl || !apiKey) return null
-  const normalizedBase = baseUrl.replace(/\/+$/, '')
-  return {
-    kind: 'platform',
-    baseUrl: normalizedBase,
-    apiKey,
-    env: (override.env ?? env.CHATU_DATA_ENV ?? 'dev').toLowerCase() === 'prod' ? 'prod' : 'dev',
-    fetchImpl: override.fetchImpl ?? fetch,
-    aiBaseUrl: (override.aiBaseUrl ?? env.CHATU_AI_URL ?? deriveAiBaseUrl(normalizedBase)).replace(/\/+$/, ''),
-    aiModel: override.model ?? env.CHATU_AI_MODEL ?? env.PRIMARY_MODEL,
-    aiEmbedModel: override.embedModel ?? env.CHATU_AI_EMBED_MODEL ?? DEFAULT_EMBED_MODEL,
-    aiImageAgent: override.imageAgent ?? env.CHATU_AI_IMAGE_AGENT,
-    aiVideoAgent: override.videoAgent ?? env.CHATU_AI_VIDEO_AGENT,
-    authSessionCacheSeconds: normalizeCacheSeconds(override.authSessionCacheSeconds ?? env.CHATU_AUTH_SESSION_CACHE),
-    authMode: normalizeAuthMode(override.authMode ?? env.CHATU_AUTH_MODE),
-  }
+  return buildPlatformConfig(env, baseUrl, apiKey)
 }
 
 /** 动态加载可选依赖（ioredis / @aws-sdk/* / @edgeone/pages-blob），不参与打包静态分析；缺失时给出可操作的错误 */

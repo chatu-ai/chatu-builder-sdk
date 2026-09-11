@@ -16,6 +16,8 @@ description: 发布与部署（EdgeOne Pages 一键部署 / 推送 Git 仓库 / 
 | **推送到 Git 仓库** | 发布面板 →「推送到 Git 仓库」 | 用户自己的仓库，之后可导入任意平台 |
 | **导出 ZIP** | 发布面板 → 导出 | 含 `Dockerfile`、`docker-compose.yml`、`DEPLOY.md`、`.env.example` 的标准 Next.js 项目 |
 
+应用若按用户要求改用了本地 SQLite（`CHATU_DATA_DRIVER=sqlite`，见 `chatu-db`）：**只有导出 ZIP / 推送 Git 两条路能保留 SQLite**（Docker 下把 `./data` 挂成卷，`DEPLOY.md` 有说明）；EdgeOne Pages 与云函数没有持久磁盘，发布面板会按所选驱动（平台托管 / EdgeOne 存储）注入，线上不会用 SQLite，预览期的数据也不会跟着上线——用户选这两条路时要先提醒。
+
 **构建发生在当前沙箱内**（不是云端构建）：`npm install` → `next build` → 上传产物。所以**依赖越重、构建越慢也越容易失败**——这是"不要装超重依赖"的直接原因。
 
 ## 部署前自检清单（写代码时就要守住）
@@ -57,6 +59,9 @@ description: 发布与部署（EdgeOne Pages 一键部署 / 推送 Git 仓库 / 
 | 线上白屏或 500，但预览正常 | 多半是删了 `force-dynamic`，或代码里读了预览才有的环境变量 | 恢复 `force-dynamic`；环境变量缺失要有兜底 |
 | 线上报数据/AI 不可用（`*_NOT_CONFIGURED`） | 手动导入时没配 `CHATU_DATA_URL` / `CHATU_APP_KEY` | 让用户从「数据与密钥」复制三个变量到部署平台 |
 | 线上调 auth 报 `AUTH_UNSUPPORTED` | 部署时选了 EdgeOne 存储驱动（无平台数据服务） | 需要登录功能就改用平台数据接入部署 |
+| EdgeOne / 云函数上线后数据是空的，预览里有 | 预览用的是本地 SQLite，数据在沙箱 `data/` 里，不随部署上线 | 如实说明；要线上有数据就改回平台托管（删 `CHATU_DATA_DRIVER`）重新录入，或改走导出 ZIP 自己部署 |
+| 导出后 Docker 里每次重启数据丢失 | 用了 SQLite 但没挂 `./data` 卷 | `docker-compose.yml` 里取消 `volumes: - ./data:/app/data` 的注释 |
+| 导出后启动报 `SQLITE_UNAVAILABLE` | 用了 SQLite 但运行环境 Node < 22.13 | 用导出的 Dockerfile（node:22）或升级 Node |
 | 部署日志里是云厂商的鉴权/授权错误 | 用户的令牌/密钥权限不足或未开通对应服务 | 这是用户侧的账号配置问题，如实转述错误，不要改代码"绕过" |
 | 部署很慢或超时 | 依赖过重、构建在沙箱内跑 | 检查是否装了不必要的重依赖；能用已装依赖就别装新的 |
 
