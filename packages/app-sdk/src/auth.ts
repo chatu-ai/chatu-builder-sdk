@@ -12,16 +12,36 @@ export interface AppUser {
   lastLoginAt: number
   disabled: boolean
   meta: Record<string, unknown>
-  /** 渠道账号模式下的渠道账号名（裸账号，不含前缀）；应用自建用户没有此字段 */
+  /** 渠道账号模式下的渠道账号名（裸账号，不含前缀）；三方登录为提供方登录名（GitHub login；微信没有）；应用自建用户没有此字段 */
   username?: string
-  /** 用户来源：应用自建（缺省）或渠道账号 */
-  source?: 'channel'
+  /** 用户来源：应用自建（缺省）、渠道账号，或三方登录提供方（wechat / wechat-mp / github …） */
+  source?: 'channel' | OAuthProvider
 }
 
 export interface SignInResult { token: string; user: AppUser; created: boolean }
 export interface SendCodeResult { sent: boolean; /** 仅预览环境且平台未配置邮件通道时返回，便于调试 */ devCode?: string | null }
 export interface UserListResult { users: AppUser[]; total: number; nextSkip: number | null }
 export interface UserPatch { name?: string | null; avatar?: string | null; disabled?: boolean; meta?: Record<string, unknown>; password?: string }
+
+/** 三方登录提供方：wechat（开放平台扫码，PC）、wechat-mp（公众号 H5，微信内）、github */
+export type OAuthProvider = 'wechat' | 'wechat-mp' | 'github' | (string & {})
+export interface OAuthStartOptions {
+  /** 应用自己的回调路由**绝对地址**（如 `${origin}/api/auth/oauth/callback`）；平台登录完成后带 ?ticket= 回到这里 */
+  callbackUrl: string
+  /** 登录完成后应用内要回到的路径（只允许站内相对路径，如 /dashboard） */
+  returnTo?: string
+  /** redirect（整页跳转，缺省）| popup（弹窗内完成，回调页 postMessage 给 opener；预览 iframe 里必须用这个） */
+  mode?: 'redirect' | 'popup'
+}
+export interface OAuthStartResult { url: string }
+export interface OAuthProviderStatus { provider: OAuthProvider; configured: boolean; /** 缺少的环境变量名 */ missing: string[] }
+export interface OAuthProvidersResult {
+  providers: OAuthProviderStatus[]
+  /** 平台回调域（微信后台「授权回调域 / 网页授权域名」填这个） */
+  callbackDomain: string | null
+  /** 平台回调完整地址（GitHub OAuth App 的 Authorization callback URL 填这个） */
+  callbackUrl: string | null
+}
 
 export interface AuthClient {
   /** 发送邮箱登录验证码 */
@@ -46,6 +66,20 @@ export interface AuthClient {
     update(id: string, patch: UserPatch): Promise<AppUser>
     delete(id: string): Promise<boolean>
   }
+  /**
+   * 三方登录（微信扫码 / 公众号 H5 / GitHub）。三步都在**应用服务端**调用：
+   * 1. start(provider, { callbackUrl }) 取授权页地址 → 302 过去（或弹窗打开）；
+   * 2. 用户在提供方授权后，平台回调把一次性 ticket 带回 callbackUrl；
+   * 3. exchange(ticket) 换会话 token（60 秒内有效、只能用一次），之后与其他登录方式一样写 cookie。
+   * 提供方的 AppID/Secret 由用户在「环境变量」里配置（WECHAT_APP_ID… / GITHUB_CLIENT_ID…），
+   * 未配置时 start() 抛 OAUTH_NOT_CONFIGURED，details.missing 列出缺的变量名。
+   */
+  oauth: {
+    start(provider: OAuthProvider, opts: OAuthStartOptions): Promise<OAuthStartResult>
+    exchange(ticket: string): Promise<SignInResult>
+    /** 各提供方是否已配置（登录页据此决定显示哪些按钮）+ 平台回调域/地址 */
+    providers(): Promise<OAuthProvidersResult>
+  }
 }
 
 /** channel 模式下这些能力不存在（账号在渠道侧开通，不走邮箱注册/验证码） */
@@ -56,6 +90,24 @@ function requireAppMode(cfg: PlatformConfig, api: string): void {
       `当前应用使用渠道账号登录（CHATU_AUTH_MODE=channel），auth.${api}() 不可用；` +
         '登录请用 auth.login(渠道账号, 密码)，账号由渠道侧开通，应用内不提供注册。',
     )
+  }
+}
+
+/** 服务端只回错误码的三方登录错误 → 面向开发者的中文说明（不含任何用户凭据） */
+function describeAuthError(code: string, json: any): string | undefined {
+  switch (code) {
+    case 'OAUTH_NOT_CONFIGURED': {
+      const missing: string[] = Array.isArray(json?.missing) ? json.missing : []
+      const domain = json?.callbackDomain ? `；提供方后台的回调域填 ${json.callbackDomain}` : ''
+      return `三方登录未配置：请在「环境变量」里添加 ${missing.join('、') || '所需变量'}${domain}`
+    }
+    case 'OAUTH_PROVIDER_UNKNOWN': return '不支持的登录提供方（可用：wechat / wechat-mp / github）'
+    case 'OAUTH_CALLBACK_INVALID': return 'callbackUrl 必须是应用自己的绝对地址（https://…/api/auth/oauth/callback）'
+    case 'OAUTH_CALLBACK_INSECURE': return 'callbackUrl 必须是 https（本机 localhost 除外）'
+    case 'OAUTH_TICKET_INVALID': return '登录票据无效或已过期（60 秒内只能用一次），请重新登录'
+    case 'OAUTH_PROVIDER_DENIED': return '用户在提供方取消了授权，或授权码已失效'
+    case 'OAUTH_EXCHANGE_FAILED': return '向提供方换取身份失败（网络或 AppSecret 不正确），请检查环境变量后重试'
+    default: return undefined
   }
 }
 
@@ -78,11 +130,30 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
     let json: any = null
     try { json = await res.json() } catch { /* ignore */ }
     if (!res.ok || json?.ok === false) {
-      throw new AppSdkError(json?.error ?? `HTTP_${res.status}`, json?.message ?? `auth ${method} ${path} failed (${res.status})`, res.status)
+      const code = json?.error ?? `HTTP_${res.status}`
+      const err = new AppSdkError(code, json?.message ?? describeAuthError(code, json) ?? `auth ${method} ${path} failed (${res.status})`, res.status)
+      if (code === 'OAUTH_NOT_CONFIGURED') err.details = { missing: json?.missing ?? [], callbackDomain: json?.callbackDomain ?? null }
+      throw err
     }
     return json as T
   }
   return {
+    oauth: {
+      async start(provider, opts) {
+        const r = await call<{ url: string }>('POST', '/oauth/start', {
+          provider, callbackUrl: opts.callbackUrl, returnTo: opts.returnTo, mode: opts.mode ?? 'redirect',
+        })
+        return { url: r.url }
+      },
+      async exchange(ticket) {
+        const r = await call<{ token: string; user: AppUser; created: boolean }>('POST', '/oauth/exchange', { ticket })
+        return { token: r.token, user: r.user, created: r.created }
+      },
+      async providers() {
+        const r = await call<{ providers: OAuthProviderStatus[]; callbackDomain: string | null; callbackUrl: string | null }>('GET', '/oauth/providers')
+        return { providers: r.providers ?? [], callbackDomain: r.callbackDomain ?? null, callbackUrl: r.callbackUrl ?? null }
+      },
+    },
     async sendCode(email) {
       requireAppMode(cfg, 'sendCode')
       const r = await call<{ sent: boolean; devCode?: string | null }>('POST', '/code/send', { email })
@@ -162,6 +233,8 @@ function platformAuth(cfg: PlatformConfig): AuthClient {
 // ---------- memory driver（本机开发 / 测试；进程退出即丢失） ----------
 /** memory 驱动在 channel 模式下的固定密码（仅本机/测试用，无任何真实校验） */
 const MEMORY_CHANNEL_PASSWORD = '123456'
+/** memory 驱动里视为「已配置」的三方登录提供方 */
+const MEMORY_OAUTH_PROVIDERS: OAuthProvider[] = ['wechat', 'wechat-mp', 'github']
 
 function memoryAuth(channelMode: boolean): AuthClient {
   const users = new Map<string, AppUser & { pwd?: string }>()
@@ -171,6 +244,8 @@ function memoryAuth(channelMode: boolean): AuthClient {
   const byEmail = new Map<string, string>()
   const sessions = new Map<string, string>()
   const codes = new Map<string, string>()
+  /** 三方登录的本机替身：start() 直接把 ticket 带回 callbackUrl，exchange() 登入一个该提供方的假用户 */
+  const oauthTickets = new Map<string, { provider: string; expiresAt: number }>()
   const norm = (email: string) => email.trim().toLowerCase()
   const strip = (u: AppUser & { pwd?: string }): AppUser => { const { pwd: _pwd, ...rest } = u; return rest }
   const issue = (id: string) => { const token = `mem_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`; sessions.set(token, id); return token }
@@ -183,6 +258,42 @@ function memoryAuth(channelMode: boolean): AuthClient {
     return user
   }
   return {
+    oauth: {
+      async start(provider, opts) {
+        if (!MEMORY_OAUTH_PROVIDERS.includes(provider)) throw new AppSdkError('OAUTH_PROVIDER_UNKNOWN', '不支持的登录提供方（可用：wechat / wechat-mp / github）')
+        if (!/^https?:\/\//.test(opts.callbackUrl)) throw new AppSdkError('OAUTH_CALLBACK_INVALID', 'callbackUrl 必须是绝对地址')
+        const ticket = `memt_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+        oauthTickets.set(ticket, { provider, expiresAt: Date.now() + 60_000 })
+        const q = new URLSearchParams({ ticket })
+        if (opts.returnTo?.startsWith('/') && !opts.returnTo.startsWith('//')) q.set('returnTo', opts.returnTo)
+        return { url: `${opts.callbackUrl}${opts.callbackUrl.includes('?') ? '&' : '?'}${q.toString()}` }
+      },
+      async exchange(ticket) {
+        const t = oauthTickets.get(ticket)
+        oauthTickets.delete(ticket)
+        if (!t || t.expiresAt < Date.now()) throw new AppSdkError('OAUTH_TICKET_INVALID', '登录票据无效或已过期')
+        // 每个提供方一个固定假用户，重复登录归并
+        const id = `${t.provider === 'github' ? 'gh' : 'wx'}_mock_${t.provider.replace('-', '_')}`
+        let user = users.get(id)
+        const created = !user
+        if (!user) {
+          const now = Date.now()
+          user = { id, email: t.provider === 'github' ? 'mock@example.com' : null, name: `${t.provider} 测试用户`, avatar: null, createdAt: now, lastLoginAt: now, disabled: false, meta: { oauth: { [t.provider]: { mock: true } } }, source: t.provider }
+          if (t.provider === 'github') user.username = 'mock-user'
+          users.set(id, user)
+          seq.set(id, nextSeq++)
+        }
+        if (user.disabled) throw new AppSdkError('USER_DISABLED', '该账号已被停用')
+        user.lastLoginAt = Date.now()
+        return { token: issue(id), user: strip(user), created }
+      },
+      async providers() {
+        return {
+          providers: MEMORY_OAUTH_PROVIDERS.map(provider => ({ provider, configured: true, missing: [] })),
+          callbackDomain: 'localhost', callbackUrl: 'http://localhost/data/v1/auth/oauth/callback',
+        }
+      },
+    },
     async sendCode(email) {
       if (channelMode) throw new AppSdkError('AUTH_MODE_UNSUPPORTED', '渠道账号模式不提供验证码登录')
       const code = String(Math.floor(100000 + Math.random() * 900000)); codes.set(norm(email), code); return { sent: true, devCode: code } },
@@ -276,6 +387,11 @@ function unsupportedAuth(kind: string): AuthClient {
     )
   }
   return {
+    oauth: {
+      async start() { return fail() },
+      async exchange() { return fail() },
+      async providers() { return fail() },
+    },
     async sendCode() { return fail() },
     async verifyCode() { return fail() },
     async register() { return fail() },
@@ -324,5 +440,10 @@ export const auth: AuthClient = {
     get: (id) => getAuth().users.get(id),
     update: (id, patch) => getAuth().users.update(id, patch),
     delete: (id) => getAuth().users.delete(id),
+  },
+  oauth: {
+    start: (provider, opts) => getAuth().oauth.start(provider, opts),
+    exchange: (ticket) => getAuth().oauth.exchange(ticket),
+    providers: () => getAuth().oauth.providers(),
   },
 }

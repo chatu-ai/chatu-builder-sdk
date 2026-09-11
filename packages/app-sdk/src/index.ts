@@ -8,7 +8,7 @@ export type { DbClient, Collection, Doc, Filter, FilterOp, Sort, FindOptions, Fi
 export { storage, getStorage } from './storage.js'
 export type { StorageClient, StorageObject, StorageListResult, UploadUrlResult } from './storage.js'
 export { auth, getAuth } from './auth.js'
-export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch } from './auth.js'
+export type { AuthClient, AppUser, SignInResult, SendCodeResult, UserListResult, UserPatch, OAuthProvider, OAuthStartOptions, OAuthStartResult, OAuthProviderStatus, OAuthProvidersResult } from './auth.js'
 export { ai, getAi } from './ai.js'
 export { extractJson, toDataUrl, buildImageInput, parseImageTask, DEFAULT_IMAGE_AGENT, buildVideoInput, parseVideoTask, parseAgentTask, isTerminalTaskState, DEFAULT_VIDEO_AGENT } from './ai.js'
 export type {

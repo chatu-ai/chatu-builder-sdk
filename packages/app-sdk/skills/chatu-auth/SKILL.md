@@ -1,6 +1,6 @@
 ---
 name: chatu-auth
-description: 应用的登录用户体系（@chatu-ai/app-sdk 的 auth），两种模式：应用自建用户（邮箱验证码/密码，可自助注册）或直接用渠道已有账号登录（不注册）。当应用需要"登录后才能用""每个人只看到自己的数据""会员/后台/多人协作"时使用；含会话 Cookie 与用户管理。禁止引入 next-auth/clerk/supabase-auth/firebase-auth/bcrypt/jose 等第三方登录库。
+description: 应用的登录用户体系（@chatu-ai/app-sdk 的 auth），两种模式：应用自建用户（邮箱验证码/密码，可自助注册；可加微信扫码、微信公众号 H5、GitHub 三方登录）或直接用渠道已有账号登录（不注册）。当应用需要"登录后才能用""每个人只看到自己的数据""会员/后台/多人协作""微信登录/GitHub 登录"时使用；含会话 Cookie、用户管理与三方登录的环境变量引导（```chatu-env 块）。禁止引入 next-auth/clerk/supabase-auth/firebase-auth/bcrypt/jose 等第三方登录库。
 ---
 
 # 应用用户体系（auth）
@@ -21,7 +21,7 @@ description: 应用的登录用户体系（@chatu-ai/app-sdk 的 auth），两�
 | | **应用自建用户**（默认） | **渠道账号** |
 | --- | --- | --- |
 | 用户是谁 | 任何访客，自己注册 | 应用所属渠道里已有的账号 |
-| 怎么登录 | 邮箱验证码 / 邮箱密码 | 渠道账号 + 密码（与登录渠道站点时一样） |
+| 怎么登录 | 邮箱验证码 / 邮箱密码，可加微信 / GitHub 三方登录（见下方「三方登录」） | 渠道账号 + 密码（与登录渠道站点时一样） |
 | 能注册吗 | ✅ 首次登录自动注册 | ❌ 账号由渠道侧开通，应用内不提供注册 |
 | 忘记密码 | 改用邮箱验证码登录 | 去渠道站点重置，应用管不了 |
 | 适合 | 面向公众的产品、会员站 | 面向渠道内部既有用户的工具/后台 |
@@ -59,7 +59,7 @@ await auth.users.update(id, { name: '新名字', disabled: true, meta: { role: '
 await auth.users.delete(id);
 ```
 
-`AppUser`：`{ id, email, name, avatar, createdAt, lastLoginAt, disabled, meta }`（渠道账号模式另有 `username` / `source`，且 `email` 可能为 null）。密码永远不会回传。
+`AppUser`：`{ id, email, name, avatar, createdAt, lastLoginAt, disabled, meta }`（渠道账号 / 三方登录用户另有 `username` / `source`（`'channel' | 'wechat' | 'wechat-mp' | 'github'`），且 `email` 可能为 null）。密码永远不会回传。
 
 **登录态存在 HttpOnly Cookie 里**，`signIn*` / `endSession` 会写/删 Cookie —— 因此**只能在 Server Action 或 Route Handler 中调用**（Server Component 只能 `currentUser()` 读）。
 
@@ -71,6 +71,69 @@ await auth.users.delete(id);
 - 发码按钮加 60 秒倒计时（服务端也有 60s 频控）；
 - 已登录访问登录页要 `redirect('/')`。
 
+## 三方登录（微信扫码 / 微信公众号 H5 / GitHub）
+
+只在**应用自建用户模式**下可用，是邮箱登录的补充（同一个用户体系，三方用户也在 `auth.users` 里，`source` 标记来源）。用户说"微信登录""GitHub 登录""微信里打开自动登录"时用这一节；**完整登录页代码见 [references/login-oauth.md](references/login-oauth.md)**。
+
+| provider | 场景 | 需要的环境变量 | 用户要准备什么 |
+| --- | --- | --- | --- |
+| `wechat` | PC 浏览器里弹二维码，微信扫码 | `WECHAT_APP_ID` `WECHAT_APP_SECRET` | 微信开放平台「网站应用」（企业主体，需审核） |
+| `wechat-mp` | 在微信内打开应用（公众号菜单、聊天分享链接），网页授权登录 | `WECHAT_MP_APP_ID` `WECHAT_MP_APP_SECRET` | 已认证的**服务号**（订阅号没有网页授权） |
+| `github` | GitHub 账号登录，开发者向工具 | `GITHUB_CLIENT_ID` `GITHUB_CLIENT_SECRET` | GitHub OAuth App（个人账号即可，无需审核） |
+
+**怎么选微信**：用户说"微信登录"但没说场景时，问一句"主要在微信里打开，还是电脑浏览器扫码？"——微信内打开更常见，优先 `wechat-mp`；两者都要就两个都配，登录页按 `pickWeChatProvider()` 自动挑（微信内 → `wechat-mp`，否则 → `wechat`）。二者能否识别为同一人取决于用户是否在开放平台绑定了公众号（有 unionid 才合并），如实告知即可。
+
+### 第一步：先要环境变量，再写代码
+
+三方登录的密钥**由用户在 Builder 的「环境变量」面板里填**，你拿不到也不该拿到。流程固定为：
+
+1. 看工作区 `.chatu/env-names.json`（`{ names: [...] }`，只有变量名没有值）判断需要的变量是否已存在。文件不存在 = 一个都没配。
+2. 缺就**在回复正文里发一个 ```` ```chatu-env ```` 块**（Builder 会把它渲染成带「去哪个后台、填什么回调域、复制到哪」步骤的配置卡片，用户点"已配置，继续"后你才会收到后续消息）：
+
+   ````md
+   微信登录需要先在微信开放平台拿到应用凭据，配好后我再接入登录页：
+
+   ```chatu-env
+   { "preset": "wechat-mp", "vars": ["WECHAT_MP_APP_ID", "WECHAT_MP_APP_SECRET"], "resume": "已配置好微信公众号登录的环境变量，请继续" }
+   ```
+   ````
+
+   字段：`preset`（`wechat` / `wechat-mp` / `github`，卡片据此带出后台链接、回调域填写步骤，**必须填**，不要自己编步骤文案）、`vars`（变量名数组；也可写 `{ name, label, secret, required }` 对象）、`title`（可选）、`resume`（用户点"继续"时替他发出的那句话）。一个块只放一个 preset；同时要微信扫码 + 公众号就发两个块。
+3. **发完块就停**，不要在同一轮继续写登录代码、不要在聊天里追问"AppID 是多少"、不要让用户把密钥贴在对话里。等用户回来（`resume` 那句话）再写代码。
+4. 环境变量已存在时跳过 1–3 直接写代码；写完后**提醒用户回调域已由平台托管**（卡片里显示的域名，用户填到提供方后台即可），不需要在应用里再配任何回调地址。
+
+### 第二步：接入登录页
+
+发起与回调两条路由**模板已内置**，不要重写：
+
+- `GET /api/auth/oauth/[provider]?returnTo=&mode=` —— 调 `oauthStartUrl()` 后 302 到提供方授权页；未配置时 302 回 `/login?error=OAUTH_NOT_CONFIGURED&missing=A,B`。
+- `GET /api/auth/oauth/callback?ticket=&returnTo=` —— 调 `signInWithOAuthTicket()` 写 Cookie 后 302 回 `returnTo`；失败回 `/login?error=…`。
+
+老工作区若没有 `src/app/api/auth/oauth/` 目录，按 references/login-oauth.md 末尾的两段代码补上。
+
+登录页要做的只有两件事：
+
+```ts
+// 服务端（Server Component）：查哪些提供方已配置，决定显示哪些按钮
+import { oauthProviders } from '@/lib/platform';
+const { providers } = await oauthProviders();   // [{ provider, configured, missing }]
+
+// 客户端按钮（'use client'）：必须在点击事件里同步调用
+import { startOAuth, pickWeChatProvider } from '@chatu-ai/app-sdk/browser';
+<button onClick={() => startOAuth('github', { returnTo: '/' })}>GitHub 登录</button>
+<button onClick={() => startOAuth(pickWeChatProvider(), { returnTo: '/' })}>微信登录</button>
+```
+
+`startOAuth(provider, { returnTo?, mode? })`：`mode` 缺省 `auto`——在 Builder 预览（iframe）里自动用弹窗（提供方授权页禁止被嵌入），线上整页跳转；弹窗被拦截自动退化为跳转。`@chatu-ai/app-sdk/browser` 只有跳转与消息接收逻辑，不含密钥，**可以**在客户端组件里 import；`@/lib/platform` 仍然不能。
+
+`oauthProviders()` 还返回 `callbackDomain` / `callbackUrl`（平台回调域），只用来给用户看，不要写死进代码。
+
+### 三方登录的限制（要如实告诉用户）
+
+- 公众号 H5 授权链接**只能在微信里打开**；PC 浏览器里点它会显示"请在微信客户端打开"。预览时用户要在微信里打开预览链接，或用扫码方式。微信内的预览要先在公众平台「网页开发者工具」绑定自己的微信号。
+- 微信开放平台网站应用需要企业主体且审核通过，个人拿不到；用户是个人开发者时建议 GitHub 或邮箱。
+- 三方登录用户没有密码，`auth.users.update()` 改密码会报 `PASSWORD_NOT_ALLOWED`；`email` 可能为 null（微信不给邮箱），**用 `user.id` 做标识**。
+- 渠道账号模式（`CHATU_AUTH_MODE=channel`）下三方登录不可用。
 
 ## 渠道账号模式：登录页与差异
 
@@ -150,7 +213,8 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 - 需要登录的页面要么 `await requireUser()`，要么在 Server Action 里再校验一次——只在前端隐藏按钮不算保护。
 - 单应用单环境上限 1 万用户、每日验证码 200 封（超出报 `CODE_QUOTA_EXCEEDED`）、每日新注册 500 个（`SIGNUP_QUOTA_EXCEEDED`）；验证码 10 分钟有效、错 5 次作废、同一邮箱 60 秒才能再发一次。
 - 密码登录同一邮箱连续失败 10 次会锁 15 分钟（`TOO_MANY_ATTEMPTS`）——登录页要把这个错误如实告诉用户，并提示"可以改用邮箱验证码登录"。
-- 只有邮箱登录；没有短信、没有微信/GitHub 第三方登录。用户要"手机号登录"时，如实说明当前只支持邮箱。
+- 没有短信/手机号登录，也没有微信小程序、QQ、支付宝、Google 等其他三方；用户要"手机号登录"时如实说明当前只支持邮箱与微信 / GitHub。不要自己去接任何提供方的 OAuth 接口（`api.weixin.qq.com` / `github.com/login/oauth`），平台已代做。
+- 三方登录的密钥只能通过 ```` ```chatu-env ```` 块让用户在面板里配；不要写进代码、`.env` 或聊天。
 
 ## 常见错误
 
@@ -167,5 +231,13 @@ for (const item of items) { const me = await currentUser(); /* … */ }
 | `CHANNEL_AUTH_UNAVAILABLE` | 渠道登录服务暂时不可达 | 提示用户稍后重试，不要把它当成"密码错误"显示 |
 | `AUTH_UNSUPPORTED` | 应用被部署在没有平台数据服务的驱动上（如 edgeone blob） | 部署时选择带平台数据服务的目标 |
 | `READ_ONLY` / 无法注册新用户 | 应用所有者点数不足，数据已置只读 | 已登录用户仍可访问；充值后自动恢复 |
+| `OAUTH_NOT_CONFIGURED`（登录页 `?error=…&missing=A,B`） | 该提供方的环境变量没配或缺一个 | 发 ```` ```chatu-env ```` 块让用户配 `missing` 里的变量，不要在代码里绕 |
+| `OAUTH_PROVIDER_UNKNOWN` | provider 拼错（只有 `wechat` / `wechat-mp` / `github`） | 改 provider 名 |
+| `OAUTH_CALLBACK_INVALID` / `OAUTH_CALLBACK_INSECURE` | 应用回调地址不合法（非 https、带 fragment 等） | 用模板的 `oauthStartUrl()`，它按当前 origin 拼回调，不要自己传 `callbackUrl` |
+| `OAUTH_STATE_INVALID` / `OAUTH_TICKET_INVALID` | 授权超过 10 分钟 / ticket 超过 60 秒或被重复使用 | 让用户重新点登录；不要缓存或重放 ticket |
+| `OAUTH_PROVIDER_DENIED` | 用户在授权页取消，或 code 已用过 | 登录页显示"已取消授权"，提供重试 |
+| `OAUTH_EXCHANGE_FAILED` | 提供方接口不可达或返回错误（GitHub 国内偶发） | 提示稍后重试；不是密钥错误 |
+| 微信页面提示"redirect_uri 参数错误" / "Scope 参数错误" | 用户在提供方后台填的回调域不对，或用了订阅号 / 未审核的网站应用 | 让用户按配置卡片重填回调域（只填域名）；确认是服务号 / 已审核 |
+| `PASSWORD_NOT_ALLOWED` | 给三方登录用户设密码 | 三方用户没有密码，不要提供改密码入口 |
 | 停用了用户但他还能访问 | 会话缓存最长 30 秒 | 等待缓存过期，或把 `CHATU_AUTH_SESSION_CACHE` 设为 0 |
 | 别人能看到我的数据 | 查询没带 `userId`，或改删时没做归属校验 | 每个 find/update/delete 都带上 `userId` 判断 |

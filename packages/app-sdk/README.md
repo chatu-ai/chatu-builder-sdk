@@ -57,6 +57,25 @@ await auth.users.update(id, { disabled: true })                // also revokes t
 
 In the Next.js template, `@/lib/platform` wraps this in HttpOnly-cookie helpers: `currentUser()`, `requireUser()`, `signInWithCode()`, `endSession()`.
 
+### Social login (WeChat / WeChat MP / GitHub)
+
+The platform runs the OAuth dance; the app only needs a provider's credentials in its env vars (`WECHAT_APP_ID`/`WECHAT_APP_SECRET`, `WECHAT_MP_APP_ID`/`WECHAT_MP_APP_SECRET`, `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`) and two routes (bundled in the template):
+
+```ts
+// server: start → provider authorize URL (302 there); the platform redirects back to callbackUrl?ticket=…
+const { url } = await auth.oauth.start('github', { callbackUrl: `${origin}/api/auth/oauth/callback`, returnTo: '/', mode: 'redirect' })
+const { token, user } = await auth.oauth.exchange(ticket)     // one-time ticket (60 s) → session
+const { providers, callbackDomain } = await auth.oauth.providers()  // [{ provider, configured, missing }]
+```
+
+```ts
+// browser (client component): no secrets, safe to import
+import { startOAuth, pickWeChatProvider } from '@chatu-ai/app-sdk/browser'
+startOAuth(pickWeChatProvider(), { returnTo: '/' })   // popup inside an iframe (Builder preview), full redirect otherwise
+```
+
+`start` throws `OAUTH_NOT_CONFIGURED` (412) with `err.details.missing` listing the env vars still unset. Social users have `source: 'wechat' | 'wechat-mp' | 'github'`, no password, and possibly `email: null`. The memory driver ships a mock flow (`start` returns `callbackUrl?ticket=memt_…`, `exchange` creates `wx_mock_wechat` / `gh_mock_github`).
+
 Limits: 10k users per app/env, 200 codes and 500 signups per day, code valid 10 min / 5 tries, 60s per-email resend window, password login locks an email for 15 min after 10 consecutive failures.
 
 Billing: every auth call is metered as `auth_ops` (100 calls = 1 point by default) and each **actually sent** verification email as `auth_emails` (1 email = 1 point). Since `getSession()` runs on every request, the platform driver keeps a 30-second in-process session cache — tune it with `CHATU_AUTH_SESSION_CACHE` (seconds, `0` disables) or `configure({ authSessionCacheSeconds })`. The cache is dropped on `signOut()` and on any `users.update()` / `users.delete()`, so disabling a user takes effect within that window.

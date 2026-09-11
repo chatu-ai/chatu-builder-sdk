@@ -86,7 +86,10 @@ export class Agent3Translator {
 
     for (const block of blocks) {
       if (block?.type === 'text' && role === 'assistant' && typeof block.text === 'string' && block.text.trim()) {
-        events.push({ kind: 'message', xid, seq, role: 'assistant', text: block.text })
+        // ```chatu-env 块 → envRequest 事件（引导卡），正文里不再显示原始 JSON
+        const { text, requests } = extractEnvRequests(block.text)
+        if (text.trim()) events.push({ kind: 'message', xid, seq, role: 'assistant', text })
+        for (const req of requests) events.push({ kind: 'envRequest', xid, seq, ...req })
       } else if (block?.type === 'tool_use') {
         const cardId = `tc_${block.id ?? seq}`
         this.toolCards.set(block.id, cardId)
@@ -127,6 +130,32 @@ export class Agent3Translator {
     if (content?.is_error) return 'failed'
     return 'completed'
   }
+}
+
+const ENV_FENCE = /```chatu-env[^\n]*\n([\s\S]*?)```/g
+
+/**
+ * 从模型回复里抽出 ```chatu-env JSON 块（技术方案 32 §4.4）。
+ * 块内容：{ preset?, title?, vars: [{name,label?,secret?,required?}] | string[], resume? }；
+ * vars 允许只写变量名数组；只有 preset 没有 vars 时由前端用预设补全（这里放一个占位 var 由 schema 校验拦住 → 要求至少写名字）。
+ * 解析失败的块原样留在正文里，不吞掉模型的话。
+ */
+export function extractEnvRequests(text: string): { text: string; requests: Array<Record<string, unknown>> } {
+  const requests: Array<Record<string, unknown>> = []
+  const stripped = text.replace(ENV_FENCE, (whole, body: string) => {
+    try {
+      const raw = JSON.parse(body)
+      const vars = Array.isArray(raw?.vars)
+        ? raw.vars.map((v: unknown) => (typeof v === 'string' ? { name: v } : v))
+        : undefined
+      if (!vars?.length) return whole
+      requests.push({ preset: raw.preset, title: raw.title, vars, resume: raw.resume })
+      return ''
+    } catch {
+      return whole
+    }
+  })
+  return { text: requests.length ? stripped.replace(/\n{3,}/g, '\n\n').trim() : text, requests }
 }
 
 function describeInput(tool: string, input: any): string | undefined {

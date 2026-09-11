@@ -51,3 +51,32 @@ describe('Agent3Translator', () => {
     expect(t.translate({ type: 'chunk' })).toEqual([]) // 无 xid/seq
   })
 })
+
+describe('extractEnvRequests (```chatu-env 块 → envRequest)', () => {
+  it('emits envRequest and strips the block from the message text', () => {
+    const t = new Agent3Translator()
+    const text = '先配置微信登录：\n\n```chatu-env\n{"preset":"wechat","vars":["WECHAT_APP_ID",{"name":"WECHAT_APP_SECRET","secret":true}]}\n```\n\n配好后告诉我。'
+    const evs = t.translate(sdk(5, 'chunk', { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }))
+    expect(evs.map(e => e.kind)).toEqual(['message', 'envRequest'])
+    expect(evs[0]).toMatchObject({ kind: 'message', text: '先配置微信登录：\n\n配好后告诉我。' })
+    expect(evs[1]).toMatchObject({
+      kind: 'envRequest', preset: 'wechat',
+      vars: [{ name: 'WECHAT_APP_ID' }, { name: 'WECHAT_APP_SECRET', secret: true }],
+    })
+  })
+
+  it('keeps an unparsable block in the text and emits nothing extra', () => {
+    const t = new Agent3Translator()
+    const text = '```chatu-env\n{not json\n```'
+    const evs = t.translate(sdk(6, 'chunk', { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }))
+    expect(evs.map(e => e.kind)).toEqual(['message'])
+    expect(evs[0]).toMatchObject({ text })
+  })
+
+  it('drops a block whose var name is not a valid env name (schema guard)', () => {
+    const t = new Agent3Translator()
+    const text = '```chatu-env\n{"vars":["bad name"]}\n```'
+    const evs = t.translate(sdk(7, 'chunk', { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] } }))
+    expect(evs).toHaveLength(0)
+  })
+})

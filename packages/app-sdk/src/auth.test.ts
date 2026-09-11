@@ -180,3 +180,77 @@ d('auth channel mode (渠道账号登录，技术方案 23)', () => {
     expect(devCode).toMatch(/^\d{6}$/)
   })
 })
+
+d('auth memory driver — oauth 本机替身', () => {
+  beforeEach(() => configure({ driver: 'memory' }))
+
+  it('start 直接把 ticket 带回 callbackUrl，exchange 登入该提供方的假用户并归并', async () => {
+    const { url } = await auth.oauth.start('wechat', { callbackUrl: 'http://localhost:3000/api/auth/oauth/callback', returnTo: '/home' })
+    const u = new URL(url)
+    expect(u.pathname).toBe('/api/auth/oauth/callback')
+    expect(u.searchParams.get('returnTo')).toBe('/home')
+    const ticket = u.searchParams.get('ticket')!
+    const first = await auth.oauth.exchange(ticket)
+    expect(first.created).toBe(true)
+    expect(first.user.source).toBe('wechat')
+    expect(first.user.id).toMatch(/^wx_/)
+    expect(await auth.getSession(first.token)).toMatchObject({ id: first.user.id })
+    // ticket 一次性
+    await expect(auth.oauth.exchange(ticket)).rejects.toMatchObject({ code: 'OAUTH_TICKET_INVALID' })
+
+    const again = await auth.oauth.start('wechat', { callbackUrl: 'http://localhost:3000/api/auth/oauth/callback' })
+    const second = await auth.oauth.exchange(new URL(again.url).searchParams.get('ticket')!)
+    expect(second.created).toBe(false)
+    expect(second.user.id).toBe(first.user.id)
+  })
+
+  it('拒绝未知提供方与相对 callbackUrl；providers 全部 configured', async () => {
+    await expect(auth.oauth.start('qq', { callbackUrl: 'http://localhost/cb' })).rejects.toMatchObject({ code: 'OAUTH_PROVIDER_UNKNOWN' })
+    await expect(auth.oauth.start('github', { callbackUrl: '/cb' })).rejects.toMatchObject({ code: 'OAUTH_CALLBACK_INVALID' })
+    const { providers } = await auth.oauth.providers()
+    expect(providers.map(p => p.provider)).toEqual(['wechat', 'wechat-mp', 'github'])
+    expect(providers.every(p => p.configured)).toBe(true)
+  })
+
+  it('github 假用户带 username 与 email', async () => {
+    const { url } = await auth.oauth.start('github', { callbackUrl: 'http://localhost/cb' })
+    const r = await auth.oauth.exchange(new URL(url).searchParams.get('ticket')!)
+    expect(r.user).toMatchObject({ source: 'github', username: 'mock-user', email: 'mock@example.com' })
+  })
+})
+
+d('auth platform driver — oauth', () => {
+  it('start / exchange / providers 走 /auth/oauth/*，OAUTH_NOT_CONFIGURED 带 missing 与回调域', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    const user = { id: 'wx_u1', email: null, name: '微信用户', avatar: null, createdAt: 1, lastLoginAt: 2, disabled: false, meta: {}, source: 'wechat' }
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      if (url.endsWith('/auth/oauth/start')) {
+        const body = JSON.parse(String(init.body))
+        if (body.provider === 'github') return new Response(JSON.stringify({ ok: false, error: 'OAUTH_NOT_CONFIGURED', missing: ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'], callbackDomain: 'api.example.com' }), { status: 412 })
+        return new Response(JSON.stringify({ ok: true, url: 'https://open.weixin.qq.com/connect/qrconnect?appid=x#wechat_redirect' }), { status: 200 })
+      }
+      if (url.endsWith('/auth/oauth/exchange')) return new Response(JSON.stringify({ ok: true, token: 't9', user, created: true }), { status: 200 })
+      if (url.endsWith('/auth/oauth/providers')) return new Response(JSON.stringify({ ok: true, providers: [{ provider: 'wechat', configured: true, missing: [] }], callbackDomain: 'api.example.com', callbackUrl: 'https://api.example.com/data/v1/auth/oauth/callback' }), { status: 200 })
+      return new Response(JSON.stringify({ ok: false, error: 'HTTP_404' }), { status: 404 })
+    }) as unknown as typeof fetch
+    configure({ driver: 'platform', baseUrl: 'https://api.test/data/v1', apiKey: 'sk-conv-abc', env: 'dev', fetchImpl })
+
+    const { url } = await auth.oauth.start('wechat', { callbackUrl: 'https://app.example.com/api/auth/oauth/callback', returnTo: '/home', mode: 'popup' })
+    expect(url).toContain('open.weixin.qq.com')
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ provider: 'wechat', callbackUrl: 'https://app.example.com/api/auth/oauth/callback', returnTo: '/home', mode: 'popup' })
+
+    const err = await auth.oauth.start('github', { callbackUrl: 'https://app.example.com/cb' }).catch(e => e)
+    expect(err).toMatchObject({ code: 'OAUTH_NOT_CONFIGURED', status: 412, details: { missing: ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'], callbackDomain: 'api.example.com' } })
+    expect(err.message).toContain('GITHUB_CLIENT_ID')
+    expect(err.message).toContain('api.example.com')
+
+    const signed = await auth.oauth.exchange('tk')
+    expect(signed).toMatchObject({ token: 't9', created: true, user: { source: 'wechat' } })
+    expect(JSON.parse(String(calls.at(-1)!.init.body))).toEqual({ ticket: 'tk' })
+
+    const p = await auth.oauth.providers()
+    expect(p.callbackDomain).toBe('api.example.com')
+    expect(p.providers[0]).toMatchObject({ provider: 'wechat', configured: true })
+  })
+})
