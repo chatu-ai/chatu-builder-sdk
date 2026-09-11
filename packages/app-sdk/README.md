@@ -306,6 +306,18 @@ const { rows } = parseCsv(await file.text())   // validate each row with zod bef
 
 UTF-8 BOM by default (Excel shows CJK correctly), RFC-4180 quoting both ways.
 
+### Usage and quota
+
+```ts
+const u = await ai.usage()
+// { month: '2026-09', dev: {calls, inputTokens, outputTokens, points}, prod: {…}, total: {…},
+//   quota: { monthlyPoints: 2000 | null, used: 1367, remaining: 633 | null } }
+
+await ai.setQuota(2000)   // this app may spend at most 2000 points this month; null clears it
+```
+
+Points are the ones actually charged (same source as the bill); `dev` and `prod` are counted separately. Past the cap, AI calls throw `AI_QUOTA_EXCEEDED` (402) while `db` / `kv` / `storage` keep working — pair it with `ratelimit` (per-user throttle) for abuse protection. Model calls made by Builder while generating the app are not counted.
+
 ## Rate limiting
 
 ```ts

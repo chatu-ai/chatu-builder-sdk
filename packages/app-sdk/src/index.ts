@@ -18,6 +18,7 @@ export type {
   AiImageAgent, AiImageOptions, AiImageResult, AiGeneratedImage, AiAgentInfo,
   AiVideoAgent, AiVideoOptions, AiVideoResult, AiVideoTask, AiAgentTask,
 } from './ai.js'
+export type { AiUsageReport, AiUsageBucket, AiQuota } from './ai.js'
 export { ratelimit } from './ratelimit.js'
 export type { RatelimitOptions, RatelimitResult } from './ratelimit.js'
 export { cosineSimilarity, rankBySimilarity, vectorSearch, splitText } from './vector.js'

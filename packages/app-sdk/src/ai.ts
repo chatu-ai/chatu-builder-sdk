@@ -291,6 +291,41 @@ export interface AiClient {
   waitForTask(agent: string, taskId: string, opts?: { pollIntervalMs?: number; timeoutMs?: number; onProgress?: (task: AiAgentTask) => void; signal?: AbortSignal }): Promise<AiAgentTask>
   /** 应用可调用的平台智能体列表（图片类 mode=sync，视频类 mode=async） */
   agents(): Promise<AiAgentInfo[]>
+  /**
+   * 本应用这个月的 AI 用量与配额（技术方案 36）。点数就是实际扣的点数，与账单同源。
+   * 预览（dev）与线上（prod）分开统计；`quota` 是应用给自己设的月度上限。
+   */
+  usage(): Promise<AiUsageReport>
+  /** 设置本应用的月度点数上限（null / 0 取消）。超限后 AI 调用抛 AI_QUOTA_EXCEEDED，不影响 db/kv/storage。 */
+  setQuota(monthlyPoints: number | null): Promise<AiQuota>
+}
+
+/** 一个环境（dev / prod）的 AI 用量 */
+export interface AiUsageBucket {
+  /** 调用次数（chat / json / stream / runTools / embed 各算一次） */
+  calls: number
+  inputTokens: number
+  outputTokens: number
+  /** 实际扣的点数 */
+  points: number
+}
+
+export interface AiQuota {
+  /** 月度点数上限；null = 没设上限 */
+  monthlyPoints: number | null
+  /** 本月已用点数（dev + prod 合计） */
+  used: number
+  /** 还剩多少点；没设上限时为 null */
+  remaining: number | null
+}
+
+export interface AiUsageReport {
+  /** 统计月份，如 '2026-09'（UTC） */
+  month: string
+  dev: AiUsageBucket
+  prod: AiUsageBucket
+  total: AiUsageBucket
+  quota: AiQuota
 }
 
 const toMessages = (input: AiMessage[] | string): AiMessage[] => (typeof input === 'string' ? [{ role: 'user', content: input }] : input)
@@ -340,14 +375,22 @@ function buildBody(cfg: PlatformConfig, messages: AiMessage[] | string, opts: Ai
   return body
 }
 
+/** 中继侧的 OpenAI 风格错误码 → SDK 统一错误码（与 agent 路径同码，方便 catch 时只判一个） */
+const ERROR_CODE_ALIASES: Record<string, string> = {
+  ai_quota_exceeded: 'AI_QUOTA_EXCEEDED',
+  insufficient_quota: 'AI_QUOTA_EXCEEDED',
+  insufficient_balance: 'AI_INSUFFICIENT_BALANCE',
+}
+
 async function throwHttpError(res: Response, what: string): Promise<never> {
   let json: any = null
   let text = ''
   try { text = await res.text(); json = JSON.parse(text) } catch { /* not json */ }
   const err = json?.error
-  const code = (typeof err === 'object' && err?.code) || (typeof err === 'string' && err) || json?.code || `HTTP_${res.status}`
+  const raw = (typeof err === 'object' && err?.code) || (typeof err === 'string' && err) || json?.code || `HTTP_${res.status}`
+  const code = ERROR_CODE_ALIASES[String(raw)] ?? String(raw)
   const message = (typeof err === 'object' && err?.message) || json?.message || (text ? text.slice(0, 300) : `${what} failed (${res.status})`)
-  throw new AppSdkError(String(code), String(message), res.status)
+  throw new AppSdkError(code, String(message), res.status)
 }
 
 function parseUsage(u: any): AiUsage | undefined {
@@ -743,7 +786,8 @@ const abortError = () => new AppSdkError('AI_ABORTED', 'ai.waitForTask: 已取�
 
 // ---------- platform driver ----------
 function platformAi(cfg: PlatformConfig): AiClient {
-  const headers = { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json' }
+  // x-chatu-env 让中继把用量记到正确的环境（dev / prod）下，中继本身忽略这个头
+  const headers = { authorization: `Bearer ${cfg.apiKey}`, 'content-type': 'application/json', 'x-chatu-env': cfg.env }
   /** aiBaseUrl 是 `{origin}/v1`；Function 的非 OpenAI 端点挂在 origin 下 */
   const functionBase = cfg.aiBaseUrl.replace(/\/v1$/, '')
   return {
@@ -898,6 +942,36 @@ function platformAi(cfg: PlatformConfig): AiClient {
       const list: any[] = Array.isArray(json?.data) ? json.data : []
       return list.filter(a => typeof a?.id === 'string').map(a => ({ id: a.id, name: a.name ?? undefined, description: a.description ?? undefined, version: a.version ?? undefined, iconUrl: a.iconUrl ?? undefined, type: a.type ?? undefined, mode: a.mode === 'async' ? 'async' as const : 'sync' as const }))
     },
+    async usage() {
+      // 用量走 Data API（与 db/kv 同一把应用密钥），不是 OpenAI 兼容端点
+      const res = await cfg.fetchImpl(`${cfg.baseUrl}/usage`, { headers: { 'x-api-key': cfg.apiKey, 'x-chatu-env': cfg.env } })
+      if (!res.ok) await throwHttpError(res, 'ai.usage')
+      const json: any = await res.json()
+      const bucket = (raw: any): AiUsageBucket => ({
+        calls: Number(raw?.calls ?? 0), inputTokens: Number(raw?.inputTokens ?? 0),
+        outputTokens: Number(raw?.outputTokens ?? 0), points: Number(raw?.points ?? 0),
+      })
+      const quota = json?.quota ?? {}
+      return {
+        month: String(json?.month ?? ''),
+        dev: bucket(json?.ai?.dev), prod: bucket(json?.ai?.prod), total: bucket(json?.ai?.total),
+        quota: {
+          monthlyPoints: quota.monthlyPoints ?? null,
+          used: Number(quota.used ?? 0),
+          remaining: quota.remaining ?? null,
+        },
+      }
+    },
+    async setQuota(monthlyPoints) {
+      const res = await cfg.fetchImpl(`${cfg.baseUrl}/ai/quota`, {
+        method: 'PUT',
+        headers: { 'x-api-key': cfg.apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ monthlyPoints }),
+      })
+      if (!res.ok) await throwHttpError(res, 'ai.setQuota')
+      const json: any = await res.json()
+      return { monthlyPoints: json?.monthlyPoints ?? null, used: Number(json?.used ?? 0), remaining: json?.remaining ?? null }
+    },
   }
 }
 
@@ -919,6 +993,8 @@ function notConfigured(): AiClient {
     getTask: async () => fail(),
     waitForTask: async () => fail(),
     agents: async () => fail(),
+    usage: async () => fail(),
+    setQuota: async () => fail(),
   }
 }
 
@@ -948,4 +1024,6 @@ export const ai: AiClient = {
   getTask: (a, t) => getAi().getTask(a, t),
   waitForTask: (a, t, o) => getAi().waitForTask(a, t, o),
   agents: () => getAi().agents(),
+  usage: () => getAi().usage(),
+  setQuota: (p) => getAi().setQuota(p),
 }
